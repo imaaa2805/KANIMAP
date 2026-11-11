@@ -108,13 +108,13 @@ const VERIFIED_BASECAMPS = {
   'Gunung Argopuro|Bremi': [-7.9215, 113.5085],
 
   // Gunung Kawi
-  'Gunung Kawi|Precet Wagir': [-7.9892, 112.5180],
-  'Gunung Kawi|Keraton': [-8.0050, 112.4950],
-  'Gunung Kawi|Kucur Dau': [-7.9510, 112.5150],
-  'Gunung Kawi|Panderman': [-7.9180, 112.4880],
-  'Gunung Kawi|Sirah Kencong Blitar': [-7.9980, 112.4220],
-  'Gunung Kawi|Ngantang': [-7.9120, 112.4250],
-  'Gunung Kawi|Mrinci Batu': [-7.9150, 112.4720],
+  'Gunung Kawi|Precet Wagir': [-7.9592, 112.4980],
+  'Gunung Kawi|Keraton': [-7.9650, 112.4820],
+  'Gunung Kawi|Kucur Dau': [-7.9310, 112.4950],
+  'Gunung Kawi|Panderman': [-7.9080, 112.4780],
+  'Gunung Kawi|Sirah Kencong Blitar': [-7.9680, 112.4120],
+  'Gunung Kawi|Ngantang': [-7.8920, 112.4150],
+  'Gunung Kawi|Mrinci Batu': [-7.8950, 112.4620],
 
   // Gunung Arjuno
   'Gunung Arjuno|Sumber Brantas': [-7.7480, 112.5380],
@@ -146,19 +146,19 @@ const VERIFIED_BASECAMPS = {
 
   // Gunung Welirang
   'Gunung Welirang|Tretes': [-7.6950, 112.6250],
-  'Gunung Welirang|Tambaksari': [-7.7350, 112.6380],
+  'Gunung Welirang|Tambaksari': [-7.7480, 112.6380],
 
   // Gunung Pundak
-  'Gunung Pundak|Puthuk Siwur': [-7.6740, 112.5530],
-  'Gunung Pundak|Trawas': [-7.6720, 112.5740],
+  'Gunung Pundak|Puthuk Siwur': [-7.6780, 112.5590],
+  'Gunung Pundak|Trawas': [-7.6760, 112.5810],
 
   // Gunung Wilis
   'Gunung Wilis|Kare (Madiun)': [-7.7520, 111.7150],
   'Gunung Wilis|Bajulan (Nganjuk)': [-7.7550, 111.8120],
   'Gunung Wilis|Bareng (Nganjuk': [-7.7780, 111.8180],
   'Gunung Wilis|Mojo/Dolo (Kediri)': [-7.8250, 111.8250],
-  'Gunung Wilis|CandiPenampihan & Jurang Senggani (Tulungagung)': [-7.8620, 111.7750],
-  'Gunung Wilis|Botoputih (Trenggalek)': [-7.8580, 111.7210],
+  'Gunung Wilis|CandiPenampihan & Jurang Senggani (Tulungagung)': [-7.8680, 111.7750],
+  'Gunung Wilis|Botoputih (Trenggalek)': [-7.8650, 111.7210],
 
   // Gunung Ciremai
   'Gunung Ciremai|Palutungan': [-6.9350, 108.4310],
@@ -167,12 +167,12 @@ const VERIFIED_BASECAMPS = {
   'Gunung Ciremai|linggasana': [-6.8720, 108.4550],
   'Gunung Ciremai|Sadarehe': [-6.8520, 108.3680],
 
-  // Gunung Kencana
-  'Gunung Kencana|Lengeran Barat Daya Gn. Paseban': [-6.6650, 106.9520],
-  'Gunung Kencana|Puncak Karvak': [-6.6710, 106.9820],
-  'Gunung Kencana|Rute Paseban': [-6.6620, 106.9580],
-  'Gunung Kencana|Telaga Warna': [-6.6950, 106.9880],
-  'Gunung Kencana|Telaga warna': [-6.6920, 106.9850],
+  // Gunung Kencana (Cisarua Bogor: Puncak -6.6589, 106.9796)
+  'Gunung Kencana|Lengeran Barat Daya Gn. Paseban': [-6.6595, 106.9635],
+  'Gunung Kencana|Puncak Karvak': [-6.6635, 106.9895],
+  'Gunung Kencana|Rute Paseban': [-6.6565, 106.9615],
+  'Gunung Kencana|Telaga Warna': [-6.6715, 106.9845],
+  'Gunung Kencana|Telaga warna': [-6.6705, 106.9830],
 
   // Gunung Pangrango
   'Gunung Pangrango|Cibodas': [-6.7412, 107.0020],
@@ -193,17 +193,48 @@ const VERIFIED_BASECAMPS = {
   // Gunung Papandayan
   'Gunung Papandayan|Cisurupan': [-7.3020, 107.7580],
 
-  // Gunung Salak
+  // Gunung Kendang (Puncak: -7.2453, 107.7086)
+  'Gunung Kendang|Pengalengan': [-7.2355, 107.6945],
+
+  // Gunung Patuha (Puncak: -7.16001, 107.401382)
+  'Gunung Patuha|Cipanganten': [-7.1455, 107.4165],
+
+  // Gunung Malabar (Puncak Besar: -7.15139, 107.6250)
+  'Gunung Malabar|Puncak Besar': [-7.1685, 107.6085],
+
+  // Gunung Guntur (Puncak: -7.15502, 107.85124)
+  'Gunung Guntur|Kampung Citiis': [-7.1645, 107.8735],
+
+  // Gunung Puntang (Puncak Mega: -7.120372, 107.620902)
+  'Gunung Puntang|Banjaran': [-7.1085, 107.6115],
+
+  // Gunung Salak (Puncak Salak 1: -6.715908, 106.733443)
   'Gunung Salak|Cidahu': [-6.7520, 106.7420],
   'Gunung Salak|Pasir Reungit': [-6.6780, 106.6980],
   'Gunung Salak|Cimelati': [-6.7580, 106.7680],
   'Gunung Salak|Ajisaka': [-6.6850, 106.7250],
 
-  // Gunung Sagara
-  'Gunung Sagara|Tajur': [-7.2020, 108.0550],
-  'Gunung Sagara|Sukamurni': [-7.2320, 108.0620],
+  // Gunung Salak 2 (Puncak Prabu: -6.701760, 106.727850)
+  'Gunung Salak 2|Ajisaka': [-6.6850, 106.7250],
+  'Gunung Salak 2|Curug Pilung (Sukamantri)': [-6.6745, 106.7385],
 
-  // Gunung Burangrang
+  // Gunung Bukit Tunggul (Puncak: -6.8105, 107.7256)
+  'Gunung Bukit Tunggul|Perkebunan Bukut Tunggul': [-6.8245, 107.7165],
+
+  // Gunung Artapela (Puncak Sulibra: -7.173674, 107.654321)
+  'Gunung Artapela|Datar Kembang': [-7.1795, 107.6715],
+
+  // Gunung Sagara (Puncak: -7.221826, 108.058127)
+  'Gunung Sagara|Tajur': [-7.2045, 108.0415],
+  'Gunung Sagara|Sukamurni': [-7.2345, 108.0435],
+
+  // Gunung Bedil (Puncak: -7.2015, 107.6385)
+  'Gunung Bedil|Wayang Windu': [-7.1965, 107.6245],
+
+  // Gunung Windu (Puncak: -7.22389, 107.63056)
+  'Gunung Windu|Pangalengan': [-7.2125, 107.6185],
+
+  // Gunung Burangrang (Puncak: -6.7748, 107.5549)
   'Gunung Burangrang|Legok haji': [-6.7920, 107.5620],
   'Gunung Burangrang|Komando': [-6.7880, 107.5420],
   'Gunung Burangrang|Pasanggarahan': [-6.7550, 107.5450],
@@ -323,7 +354,84 @@ function generateRidgeWaypoints(bcLat, bcLng, peakLat, peakLng, posCount, seed =
       points.push({ urutan: i, lat, lng });
     }
   }
-  return points;
+
+  const waypoints = [];
+  for (let i = 1; i <= posCount; i++) {
+    const t = (lastIsPeak && i === posCount) ? 1.0 : (i / totalSteps);
+    const [lat, lng] = pointAtT(t);
+    waypoints.push({ urutan: i, lat, lng });
+  }
+
+  return { waypoints, jalurGeo };
+}
+
+async function ensureGunungSalak2() {
+  const existingSalak2 = await prisma.gunung.findFirst({
+    where: { nama: 'Gunung Salak 2' }
+  });
+  if (existingSalak2) return;
+
+  console.log('➕ Menambahkan Gunung Salak 2 (Puncak Prabu - 2.180 mdpl) ke database...');
+  await prisma.gunung.create({
+    data: {
+      nama: 'Gunung Salak 2',
+      slug: 'gunung-salak-2',
+      provinsi: 'Jawa Barat',
+      kabupaten: 'Bogor, Sukabumi',
+      ketinggian: 2180,
+      statusVulkanik: 'Normal',
+      statusJalur: 'Buka',
+      tipeGunung: 'Stratovolcano',
+      kuotaHarian: 300,
+      kuotaTersisa: 240,
+      cuacaSuhu: 15,
+      cuacaKondisi: 'Kabut Tipis',
+      latitude: -6.701760,
+      longitude: 106.727850,
+      deskripsi: 'Puncak Salak 2 (Puncak Prabu - 2.180 mdpl) merupakan puncak utama kedua di kompleks Gunung Salak yang terkenal dengan jalur punggungan akar dan tebing menantang via Ajisaka dan Curug Pilung.',
+      basecamps: {
+        create: [
+          {
+            nama: 'Basecamp Salak 2 Via Ajisaka',
+            jalurVia: 'Ajisaka',
+            totalPos: 4,
+            status: 'Buka Resmi',
+            latitude: -6.685000,
+            longitude: 106.725000,
+            elevasi: 1050,
+            kontak: '+62 812-9000-2180',
+            simaksiInfo: 'Simaksi TNGHS Resmi',
+            pos: {
+              create: [
+                { namaPos: 'Pos 1 Pintu Hutan Ajisaka', urutan: 1, latitude: -6.6890, longitude: 106.7258, elevasi: 1320, adaAir: true, areaCamp: false, keterangan: 'Batas hutan pinus dan hutan hujan tropis' },
+                { namaPos: 'Pos 2 Punggungan Akar', urutan: 2, latitude: -6.6935, longitude: 106.7265, elevasi: 1610, adaAir: false, areaCamp: true, keterangan: 'Area camp darurat di punggungan akar' },
+                { namaPos: 'Pos 3 Lembah Lumut', urutan: 3, latitude: -6.6980, longitude: 106.7272, elevasi: 1920, adaAir: false, areaCamp: true, keterangan: 'Hutan lumut sebelum tanjakan tebing Puncak Salak 2' },
+                { namaPos: 'Puncak Salak 2 (Puncak Prabu)', urutan: 4, latitude: -6.70176, longitude: 106.72785, elevasi: 2180, adaAir: false, areaCamp: true, keterangan: 'Titik tertinggi Puncak Salak II (2.180 mdpl)' }
+              ]
+            }
+          },
+          {
+            nama: 'Basecamp Salak 2 Via Curug Pilung (Sukamantri)',
+            jalurVia: 'Curug Pilung (Sukamantri)',
+            totalPos: 3,
+            status: 'Buka Resmi',
+            latitude: -6.674500,
+            longitude: 106.738500,
+            elevasi: 980,
+            kontak: '+62 812-9000-2181',
+            simaksiInfo: 'Simaksi TNGHS Sukamantri',
+            pos: {
+              create: [
+                { namaPos: 'Pos 1 Curug Pilung', urutan: 1, latitude: -6.6835, longitude: 106.7350, elevasi: 1350, adaAir: true, areaCamp: true, keterangan: 'Dekat aliran air Curug Pilung' },
+                { namaPos: 'Pos 2 Simpang Kawah Ratu - Salak 2', urutan: 2, latitude: -6.6930, longitude: 106.7315, elevasi: 1780, adaAir: false, areaCamp: true, keterangan: 'Persimpangan punggungan menuju Salak 2' },
+                { namaPos: 'Puncak Salak 2 (Puncak Prabu)', urutan: 3, latitude: -6.70176, longitude: 106.72785, elevasi: 2180, adaAir: false, areaCamp: true, keterangan: 'Titik tertinggi Puncak Salak II (2.180 mdpl)' }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  });
 }
 
 async function alignAllTrails() {
