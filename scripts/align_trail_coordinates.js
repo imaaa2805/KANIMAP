@@ -1,108 +1,100 @@
 /**
- * Script Penyelarasan Penuh & Akurat Koordinat Gunung, Basecamp, Titik Pos & Geometri Jalur (jalurGeo)
+ * Script Penyelarasan Penuh Koordinat Gunung, Basecamp & Titik Pos Pendakian
  * (Basecamp -> Pos 1 -> Pos 2 -> ... -> Puncak)
  *
- * Memastikan seluruh gunung di Pulau Jawa (termasuk Gunung Salak 1 & Gunung Salak 2 serta Gunung Pangradinan) memiliki:
- * 1. Koordinat Puncak asli tepat di titik segitiga puncak (▲) OpenTopoMap / OpenStreetMap / PeakVisor / Mapcarta
- * 2. Koordinat Basecamp asli di kaki gunung sesuai arah desa/trailhead sebenarnya
- * 3. Geometri jalur pendakian multi-titik (Basecamp.jalurGeo) yang mengikuti kontur punggungan alami
- * 4. Urutan Pos 1..N yang tepat berada di atas garis jalur pendakian dengan elevasi naik monotonik menuju Puncak
+ * Memastikan seluruh 80 gunung di Pulau Jawa memiliki:
+ * 1. Koordinat Puncak asli sesuai peta topografi (OpenTopoMap / OpenStreetMap)
+ * 2. Koordinat Basecamp asli di kaki gunung sesuai arah jalurnya (tidak menumpuk di koordinat dummy)
+ * 3. Urutan Pos 1..N yang naik secara proporsional mengikuti punggungan gunung menuju tepat ke titik Puncak
  */
 
 const prisma = require('../config/database');
 
-// Koordinat Puncak Terverifikasi tepat di titik segitiga ▲ OpenTopoMap / OpenStreetMap / PeakVisor / Mapcarta
+// Koordinat Puncak Terverifikasi untuk seluruh 80 Gunung di Database
 const VERIFIED_PEAKS = {
-  // Jawa Timur
-  'Gunung Lawu': [-7.627400, 111.194300],
-  'Gunung Argopuro': [-7.964500, 113.566300],
-  'Gunung Kawi': [-7.923300, 112.451800],
-  'Gunung Arjuno': [-7.725000, 112.589400],
-  'Gunung Penanggunan': [-7.615700, 112.620100],
-  'Gunung Kelud': [-7.930000, 112.308000],
-  'Gunung Panderman': [-7.902800, 112.497700],
-  'Gunung Raung': [-8.119500, 114.056300],
-  'Gunung Dorowati': [-7.834000, 112.438000],
-  'Gunung Welirang': [-7.732600, 112.574700],
-  'Gunung Pundak': [-7.694600, 112.570400],
-  'Gunung Wilis': [-7.820419, 111.756703],
-
-  // Jawa Barat & Banten
-  'Gunung Ciremai': [-6.892880, 108.406820],
-  'Gunung Kencana': [-6.658900, 106.979600],
-  'Gunung Pangrango': [-6.770156, 106.964525],
-  'Gunung Gede': [-6.789884, 106.983194],
-  'Gunung Cikurai': [-7.322703, 107.859702],
-  'Gunung Papandayan': [-7.325300, 107.736410],
-  'Gunung Kendang': [-7.245300, 107.708600],
-  'Gunung Patuha': [-7.160010, 107.401382],
-  'Gunung Malabar': [-7.151390, 107.625000],
-  'Gunung Guntur': [-7.155020, 107.851240],
-  'Gunung Puntang': [-7.120372, 107.620902],
-  'Gunung Salak': [-6.715908, 106.733443],
-  'Gunung Salak 2': [-6.701760, 106.727850],
-  'Gunung Bukit Tunggul': [-6.810500, 107.725600],
-  'Gunung Artapela': [-7.173674, 107.654321],
-  'Gunung Sagara': [-7.221826, 108.058127],
-  'Gunung Bedil': [-7.201500, 107.638500],
-  'Gunung Windu': [-7.223890, 107.630560],
-  'Gunung Burangrang': [-6.774800, 107.554900],
-  'Gunung Mandalawangi': [-7.058100, 107.863400],
-  'Gunung Halimun': [-6.710400, 106.451200],
-  'Gunung Manglayang': [-6.875600, 107.743600],
-  'Gunung Sawal': [-7.189271, 108.271554],
-  'Gunung Kerenceng': [-6.934374, 107.881868],
-  'Gunung Cakrabuana': [-7.042421, 108.139220],
-  'Gunung Sangar': [-7.102850, 107.632400],
-  'Gunung Tampomas': [-6.764720, 107.960500],
-  'Gunung Calancang': [-6.958372, 107.950274],
-  'Gunung Masigit Kareumbi': [-6.932176, 107.869169],
-  'Gunung Bitung': [-7.064217, 108.331472],
-  'Gunung Sanggabuana': [-6.590800, 107.220600],
-  'Gunung Geulis': [-6.936320, 107.803350],
-  'Gunung Karang': [-6.273200, 106.046800],
-  'Gunung Kawali': [-7.185400, 108.370400],
-  'Gunung Bongkok': [-6.601600, 107.337400],
-  'Gunung Batu Jonggol': [-6.603889, 107.052778],
-  'Gunung Lembu': [-6.561699, 107.340267],
-  'Gunung Munara': [-6.453450, 106.627468],
-  'Gunung Pangradinan': [-7.044331, 107.838104],
-
-  // Jawa Tengah & DIY
-  'Gunung Slamet': [-7.239170, 109.220000],
-  'Gunung Sumbing': [-7.385000, 110.072500],
-  'Gunung Merbabu': [-7.455000, 110.440000],
-  'Gunung Sindoro': [-7.300810, 109.996210],
-  'Gunung Merapi': [-7.541390, 110.446110],
-  'Gunung Prau': [-7.186940, 109.922780],
-  'Gunung Pakuwaja': [-7.229460, 109.922490],
-  'Gunung Bisma': [-7.239170, 109.888830],
-  'Gunung Sikunir': [-7.238610, 109.929720],
-  'Gunung Sipandu': [-7.175000, 109.885000],
-  'Gunung Rogojembangan': [-7.176110, 109.711670],
-  'Gunung Ungaran': [-7.185134, 110.346941],
-  'Gunung Kendil': [-7.285000, 110.025000],
-  'Gunung Andong': [-7.389000, 110.371183],
-  'Gunung Muria': [-6.616200, 110.890300],
-  'Gunung Nagasari': [-7.145000, 109.685000],
-  'Gunung Batur': [-7.168000, 110.348000],
-  'Gunung Beser': [-7.565000, 111.115000],
-  'Gunung Wagir Jarian': [-7.558000, 109.585000],
-  'Gunung Lumping': [-7.245000, 110.095000],
-  'Gunung Turgo': [-7.582500, 110.424500],
-  'Gunung Kumbang': [-7.125000, 108.815000],
-  'Gunung Lanang': [-7.452000, 109.812000],
-  'Gunung Gajah': [-7.095000, 109.305000],
-  'Gunung Midangan': [-7.585000, 109.845000],
-  'Gunung Ayamayam': [-7.562000, 109.915000],
-  'Gunung Kukusan': [-7.638000, 110.145000],
-  'Gunung Blego': [-7.885000, 111.245000],
-  'Gunung Lasem': [-6.692000, 111.515000],
-  'Gunung Api Purba Nglanggeran': [-7.840760, 110.542770],
-  'Gunung Gentong': [-7.854722, 110.573611]
+  'Gunung Lawu': [-7.6250, 111.1922],
+  'Gunung Argopuro': [-7.9681, 113.5758],
+  'Gunung Kawi': [-7.9625, 112.4680],
+  'Gunung Arjuno': [-7.7250, 112.5894],
+  'Gunung Penanggunan': [-7.6156, 112.6200],
+  'Gunung Kelud': [-7.9300, 112.3080],
+  'Gunung Panderman': [-7.9044, 112.4964],
+  'Gunung Raung': [-8.1258, 114.0458],
+  'Gunung Dorowati': [-7.8340, 112.4380],
+  'Gunung Welirang': [-7.7056, 112.5750],
+  'Gunung Pundak': [-7.6908, 112.5625],
+  'Gunung Wilis': [-7.8075, 111.7580],
+  'Gunung Ciremai': [-6.8925, 108.4065],
+  'Gunung Kencana': [-6.6780, 106.9685],
+  'Gunung Pangrango': [-6.7700, 106.9647],
+  'Gunung Gede': [-6.7883, 106.9841],
+  'Gunung Cikurai': [-7.3225, 107.8600],
+  'Gunung Papandayan': [-7.3195, 107.7310],
+  'Gunung Kendang': [-7.2350, 107.7120],
+  'Gunung Patuha': [-7.1608, 107.4000],
+  'Gunung Malabar': [-7.1306, 107.6510],
+  'Gunung Guntur': [-7.1428, 107.8408],
+  'Gunung Puntang': [-7.1180, 107.6210],
+  'Gunung Salak': [-6.7156, 106.7339],
+  'Gunung Bukit Tunggul': [-6.8108, 107.7269],
+  'Gunung Artapela': [-7.2125, 107.6830],
+  'Gunung Sagara': [-7.2185, 108.0785],
+  'Gunung Bedil': [-7.1960, 107.6420],
+  'Gunung Windu': [-7.2050, 107.6350],
+  'Gunung Burangrang': [-6.7745, 107.5556],
+  'Gunung Mandalawangi': [-7.1150, 107.8550],
+  'Gunung Halimun': [-6.7090, 106.4550],
+  'Gunung Manglayang': [-6.8775, 107.7436],
+  'Gunung Sawal': [-7.1930, 108.2680],
+  'Gunung Kerenceng': [-6.9420, 107.8680],
+  'Gunung Cakrabuana': [-7.0350, 108.1320],
+  'Gunung Sangar': [-7.0680, 107.6350],
+  'Gunung Tampomas': [-6.7686, 107.9575],
+  'Gunung Calancang': [-6.9350, 107.8480],
+  'Gunung Masigit Kareumbi': [-6.9520, 107.8850],
+  'Gunung Bitung': [-7.1650, 108.3550],
+  'Gunung Sanggabuana': [-6.5880, 107.2180],
+  'Gunung Geulis': [-6.9420, 107.7920],
+  'Gunung Karang': [-6.9120, 107.1250],
+  'Gunung Kawali': [-7.1850, 108.3680],
+  'Gunung Bongkok': [-6.5960, 107.3860],
+  'Gunung Batu Jonggol': [-6.5950, 106.9850],
+  'Gunung Lembu': [-6.5820, 107.3680],
+  'Gunung Munara': [-6.4520, 106.6320],
+  'Gunung Slamet': [-7.2425, 109.2085],
+  'Gunung Sumbing': [-7.3842, 110.0701],
+  'Gunung Merbabu': [-7.4550, 110.4400],
+  'Gunung Sindoro': [-7.3000, 109.9920],
+  'Gunung Merapi': [-7.5407, 110.4457],
+  'Gunung Prau': [-7.1869, 109.9228],
+  'Gunung Pakuwaja': [-7.2250, 109.9320],
+  'Gunung Bisma': [-7.2580, 109.8850],
+  'Gunung Sikunir': [-7.2390, 109.9250],
+  'Gunung Sipandu': [-7.1750, 109.8850],
+  'Gunung Rogojembangan': [-7.1850, 109.7150],
+  'Gunung Ungaran': [-7.1800, 110.3300],
+  'Gunung Kendil': [-7.2850, 110.0250],
+  'Gunung Andong': [-7.3860, 110.3690],
+  'Gunung Muria': [-6.6167, 110.8917],
+  'Gunung Nagasari': [-7.1450, 109.6850],
+  'Gunung Batur': [-7.1680, 110.3480],
+  'Gunung Beser': [-7.5650, 111.1150],
+  'Gunung Wagir Jarian': [-7.5580, 109.5850],
+  'Gunung Lumping': [-7.2450, 110.0950],
+  'Gunung Turgo': [-7.5825, 110.4245],
+  'Gunung Kumbang': [-7.1250, 108.8150],
+  'Gunung Lanang': [-7.4520, 109.8120],
+  'Gunung Gajah': [-7.0950, 109.3050],
+  'Gunung Midangan': [-7.5850, 109.8450],
+  'Gunung Ayamayam': [-7.5620, 109.9150],
+  'Gunung Kukusan': [-7.6380, 110.1450],
+  'Gunung Blego': [-7.8850, 111.2450],
+  'Gunung Lasem': [-6.6920, 111.5150],
+  'Gunung Api Purba Nglanggeran': [-7.8420, 110.5420],
+  'Gunung Gentong': [-7.8320, 110.5850]
 };
 
-// Koordinat Basecamp Terverifikasi untuk seluruh Jalur Via ('Nama Gunung|Jalur Via')
+// Koordinat Basecamp Terverifikasi berdasarkan 'Nama Gunung|Jalur Via'
 const VERIFIED_BASECAMPS = {
   // Gunung Lawu
   'Gunung Lawu|Cemoro Sewu': [-7.6581, 111.1914],
@@ -248,67 +240,22 @@ const VERIFIED_BASECAMPS = {
   'Gunung Burangrang|Pasanggarahan': [-6.7550, 107.5450],
   'Gunung Burangrang|Pangheotan': [-6.7580, 107.5720],
 
-  // Gunung Mandalawangi (Puncak: -7.0581, 107.8634)
-  'Gunung Mandalawangi|Kadungora': [-7.0725, 107.8765],
+  // Gunung Halimun
+  'Gunung Halimun|Citalahab': [-6.7320, 106.4850],
+  'Gunung Halimun|Nirmala': [-6.7250, 106.4750],
 
-  // Gunung Halimun (Puncak: -6.7104, 106.4512)
-  'Gunung Halimun|Citalahab': [-6.7165, 106.4865],
-  'Gunung Halimun|Nirmala': [-6.7285, 106.4795],
-
-  // Gunung Manglayang (Puncak: -6.8756, 107.7436)
+  // Gunung Manglayang
   'Gunung Manglayang|Batu kuda': [-6.8920, 107.7450],
   'Gunung Manglayang|Palintang': [-6.8620, 107.7280],
   'Gunung Manglayang|Barubatu': [-6.8650, 107.7580],
 
-  // Gunung Sawal (Puncak: -7.189271, 108.271554)
-  'Gunung Sawal|Cimaragas': [-7.2085, 108.2635],
+  // Gunung Cakrabuana
+  'Gunung Cakrabuana|Bunigeulis': [-7.0580, 108.1150],
+  'Gunung Cakrabuana|Sukanyiru': [-7.0180, 108.1520],
 
-  // Gunung Kerenceng (Puncak: -6.934374, 107.881868)
-  'Gunung Kerenceng|Jambu kidul': [-6.9515, 107.8755],
-
-  // Gunung Cakrabuana (Puncak: -7.042421, 108.139220)
-  'Gunung Cakrabuana|Bunigeulis': [-7.058500, 108.122500],
-  'Gunung Cakrabuana|Sukanyiru': [-6.998610, 108.117500],
-
-  // Gunung Sangar (Puncak: -7.102850, 107.632400 | BC Citiis WJ6P+9MV: -7.089047, 107.636602)
-  'Gunung Sangar|Arjasari': [-7.089047, 107.636602],
-
-  // Gunung Tampomas (Puncak Sanghyang Taraje: -6.764720, 107.960500)
-  'Gunung Tampomas|Narimbang': [-6.752200, 107.987200],
-  'Gunung Tampomas|Cibereum': [-6.791400, 107.960600],
-
-  // Gunung Calancang (Puncak: -6.958372, 107.950274)
-  'Gunung Calancang|Cilengkrang': [-6.9665, 107.9345],
-
-  // Gunung Masigit Kareumbi (Puncak: -6.932176, 107.869169)
-  'Gunung Masigit Kareumbi|Leuwiliang': [-6.9525, 107.8595],
-
-  // Gunung Bitung (Puncak Ciamis-Talaga: -7.064217, 108.331472)
-  'Gunung Bitung|Telaga': [-7.051500, 108.321500],
-
-  // Gunung Sanggabuana (Puncak: -6.5908, 107.2206)
-  'Gunung Sanggabuana|Loji': [-6.5650, 107.2245],
-
-  // Gunung Geulis (Puncak: -6.936320, 107.803350)
-  'Gunung Geulis|Jatinangor': [-6.932500, 107.791500],
-
-  // Gunung Karang (Puncak: -6.2732, 106.0468)
-  'Gunung Karang|Kaduengang': [-6.2835, 106.0625],
-
-  // Gunung Kawali (Puncak: -7.185400, 108.370400 | Situs Astana Gede: -7.190111, 108.362750)
-  'Gunung Kawali|Astana Gede': [-7.190111, 108.362750],
-
-  // Gunung Bongkok (Puncak Batu Tumpuk: -6.601600, 107.337400 | BC Sukamulya/Cikandang: -6.605600, 107.334200)
-  'Gunung Bongkok|Cikandang': [-6.605600, 107.334200],
-
-  // Gunung Batu Jonggol (Puncak OSM 1070190789: -6.603889, 107.052778)
-  'Gunung Batu Jonggol|Sukaharja': [-6.609500, 107.048500],
-
-  // Gunung Lembu (Puncak Batu Lembu: -6.561699, 107.340267)
-  'Gunung Lembu|Panyindangan': [-6.568500, 107.346500],
-
-  // Gunung Munara (Puncak: -6.453450, 106.627468)
-  'Gunung Munara|Kampung sawah': [-6.455500, 106.634500],
+  // Gunung Tampomas
+  'Gunung Tampomas|Narimbang': [-6.7480, 107.9720],
+  'Gunung Tampomas|Cibereum': [-6.7880, 107.9380],
 
   // Gunung Slamet
   'Gunung Slamet|Bambangan': [-7.2320, 109.2620],
@@ -349,31 +296,22 @@ const VERIFIED_BASECAMPS = {
 
   // Gunung Pakuwaja
   'Gunung Pakuwaja|Parikesit': [-7.2120, 109.9210],
-  'Gunung Pakuwaja|Sembungan': [-7.2385, 109.9165],
+  'Gunung Pakuwaja|Sembungan': [-7.2350, 109.9180],
 
   // Gunung Bisma
-  'Gunung Bisma|Silandak': [-7.2580, 109.8950],
-  'Gunung Bisma|Sikunang': [-7.2250, 109.8980],
-  'Gunung Bisma|Deroduwur': [-7.2620, 109.8750],
-
-  // Gunung Sikunir
-  'Gunung Sikunir|Sembungan': [-7.2355, 109.9215],
-
-  // Gunung Sipandu
-  'Gunung Sipandu|Pranten': [-7.1635, 109.8790],
+  'Gunung Bisma|Silandak': [-7.2720, 109.8950],
+  'Gunung Bisma|Sikunang': [-7.2420, 109.8980],
+  'Gunung Bisma|Deroduwur': [-7.2780, 109.8750],
 
   // Gunung Rogojembangan
-  'Gunung Rogojembangan|Gumelem': [-7.1620, 109.6980],
-  'Gunung Rogojembangan|Wanayasa': [-7.1920, 109.7250],
+  'Gunung Rogojembangan|Gumelem': [-7.1680, 109.7020],
+  'Gunung Rogojembangan|Wanayasa': [-7.2020, 109.7280],
 
   // Gunung Ungaran
   'Gunung Ungaran|Mawar': [-7.1950, 110.3620],
   'Gunung Ungaran|Gedong Songo': [-7.2080, 110.3420],
   'Gunung Ungaran|Promasan': [-7.1620, 110.3180],
   'Gunung Ungaran|Perantunan': [-7.2020, 110.3520],
-
-  // Gunung Kendil
-  'Gunung Kendil|Sibajag': [-7.2740, 110.0330],
 
   // Gunung Andong
   'Gunung Andong|Sawit': [-7.3940, 110.3610],
@@ -383,98 +321,38 @@ const VERIFIED_BASECAMPS = {
   // Gunung Muria
   'Gunung Muria|Rahtawu': [-6.6520, 110.8820],
   'Gunung Muria|Tempur': [-6.5880, 110.8950],
-  'Gunung Muria|Pemberit': [-6.6120, 110.9250],
-
-  // Gunung Nagasari
-  'Gunung Nagasari|Dieng Kulon': [-7.1335, 109.6780],
-
-  // Gunung Batur
-  'Gunung Batur|Selo': [-7.1785, 110.3435],
-
-  // Gunung Beser
-  'Gunung Beser|Bawang': [-7.5755, 111.1085],
-
-  // Gunung Wagir Jarian
-  'Gunung Wagir Jarian|Sawangan': [-7.5685, 109.5865],
-
-  // Gunung Lumping
-  'Gunung Lumping|Sukorejo': [-7.2555, 110.1010],
-
-  // Gunung Turgo
-  'Gunung Turgo|Turgo': [-7.5905, 110.4220],
-
-  // Gunung Kumbang
-  'Gunung Kumbang|Salem': [-7.1105, 108.8215],
-
-  // Gunung Lanang
-  'Gunung Lanang|Mergolunjar': [-7.4425, 109.8075],
-
-  // Gunung Gajah
-  'Gunung Gajah|Gongseng': [-7.0865, 109.3010],
-
-  // Gunung Midangan
-  'Gunung Midangan|Pituruh': [-7.5955, 109.8410],
-
-  // Gunung Ayamayam
-  'Gunung Ayamayam|Sadang': [-7.5725, 109.9105],
-
-  // Gunung Kukusan
-  'Gunung Kukusan|Nglinggo': [-7.6465, 110.1475],
-
-  // Gunung Blego
-  'Gunung Blego|Trompo': [-7.8950, 111.2495],
-
-  // Gunung Lasem
-  'Gunung Lasem|Gowak': [-6.6985, 111.4985],
-
-  // Gunung Api Purba Nglanggeran (Puncak Gunung Gedhe: -7.840760, 110.542770 | BC Pendopo Kaliadem: -7.843500, 110.538200)
-  'Gunung Api Purba Nglanggeran|Nglanggeran': [-7.843500, 110.538200],
-
-  // Gunung Gentong / Puncak 4G Gedangsari (Puncak: -7.854722, 110.573611 | BC Manggung Ngalang: -7.861500, 110.570500)
-  'Gunung Gentong|Ngalang': [-7.861500, 110.570500],
-
-  // Gunung Pangradinan
-  'Gunung Pangradinan|Cihanyir (Cikancung)': [-7.0365, 107.8342],
-  'Gunung Pangradinan|Gorowek': [-7.0515, 107.8425]
+  'Gunung Muria|Pemberit': [-6.6120, 110.9250]
 };
 
-/**
- * Menghasilkan koordinat Pos 1..N dan geometri jalur multi-titik (jalurGeo)
- * yang mengikuti kontur punggungan alami dari Basecamp menuju Puncak
- * sehingga setiap pin Pos berada tepat di atas garis jalur pendakian.
- */
-function generateRidgeTrailAndPos(bcLat, bcLng, peakLat, peakLng, posCount, seed = 1, lastIsPeak = false) {
+function generateRidgeWaypoints(bcLat, bcLng, peakLat, peakLng, posCount, seed = 1, lastIsPeak = false) {
   const deltaLat = peakLat - bcLat;
   const deltaLng = peakLng - bcLng;
   const len = Math.sqrt(deltaLat * deltaLat + deltaLng * deltaLng);
-  if (len === 0) return { waypoints: [], jalurGeo: [[bcLat, bcLng], [peakLat, peakLng]] };
+  if (len === 0 || posCount <= 0) return [];
 
   // Vektor normal tegak lurus untuk lengkungan kontur punggungan alami
   const normLat = -deltaLng / len;
   const normLng = deltaLat / len;
   const dir = (seed % 2 === 0) ? 1 : -1;
-  const curveAmp = 0.06 * len * dir;
+  const curveAmp = 0.055 * len * dir;
 
-  function pointAtT(t) {
-    if (t <= 0) return [Number(bcLat.toFixed(6)), Number(bcLng.toFixed(6))];
-    if (t >= 1) return [Number(peakLat.toFixed(6)), Number(peakLng.toFixed(6))];
-    const offset =
-      Math.sin(Math.PI * t) * curveAmp +
-      Math.sin(2 * Math.PI * t) * (curveAmp * 0.28) +
-      Math.sin(3 * Math.PI * t) * (curveAmp * 0.10 * dir);
-    const lat = Number((bcLat + t * deltaLat + offset * normLat).toFixed(6));
-    const lng = Number((bcLng + t * deltaLng + offset * normLng).toFixed(6));
-    return [lat, lng];
-  }
+  const points = [];
+  const totalSteps = lastIsPeak ? posCount : posCount + 1;
 
-  const totalSteps = lastIsPeak ? Math.max(1, posCount) : posCount + 1;
-  const subSegmentsPerStep = 4;
-  const totalGeoSteps = totalSteps * subSegmentsPerStep;
-
-  const jalurGeo = [];
-  for (let s = 0; s <= totalGeoSteps; s++) {
-    const t = s / totalGeoSteps;
-    jalurGeo.push(pointAtT(t));
+  for (let i = 1; i <= posCount; i++) {
+    if (lastIsPeak && i === posCount) {
+      points.push({
+        urutan: i,
+        lat: Number(peakLat.toFixed(6)),
+        lng: Number(peakLng.toFixed(6))
+      });
+    } else {
+      const t = i / totalSteps;
+      const offset = Math.sin(Math.PI * t) * curveAmp + Math.sin(2 * Math.PI * t) * (curveAmp * 0.25);
+      const lat = Number((bcLat + t * deltaLat + offset * normLat).toFixed(6));
+      const lng = Number((bcLng + t * deltaLng + offset * normLng).toFixed(6));
+      points.push({ urutan: i, lat, lng });
+    }
   }
 
   const waypoints = [];
@@ -557,9 +435,7 @@ async function ensureGunungSalak2() {
 }
 
 async function alignAllTrails() {
-  console.log('🏔️ Memulai Penyelarasan Penuh Koordinat Puncak, Basecamp, Pos & Geometri Jalur...');
-
-  await ensureGunungSalak2();
+  console.log('🏔️ Memulai Penyelarasan Penuh Koordinat Puncak, Basecamp & Jalur Pos sesuai Peta...');
 
   const mountains = await prisma.gunung.findMany({
     include: { basecamps: { include: { pos: { orderBy: { urutan: 'asc' } } } } }
@@ -571,7 +447,7 @@ async function alignAllTrails() {
 
   for (const m of mountains) {
     const verifiedPeak = VERIFIED_PEAKS[m.nama];
-    const peakLat = verifiedPeak ? verifiedPeak[0] : (m.latitude > 0 ? -Math.abs(m.latitude) : m.latitude);
+    const peakLat = verifiedPeak ? verifiedPeak[0] : m.latitude;
     const peakLng = verifiedPeak ? verifiedPeak[1] : m.longitude;
     const peakElev = m.ketinggian;
 
@@ -587,7 +463,7 @@ async function alignAllTrails() {
     });
     updatedMountains++;
 
-    // 2. Update setiap Basecamp, Pos & jalurGeo di gunung ini
+    // 2. Update setiap Basecamp & Pos di gunung ini
     for (let bIdx = 0; bIdx < m.basecamps.length; bIdx++) {
       const b = m.basecamps[bIdx];
       const key = `${m.nama}|${b.jalurVia}`;
@@ -597,29 +473,14 @@ async function alignAllTrails() {
         bcLat = VERIFIED_BASECAMPS[key][0];
         bcLng = VERIFIED_BASECAMPS[key][1];
       } else {
+        // Tempatkan basecamp di kaki gunung (~2.2 km dari puncak) dengan sudut berbeda tiap jalur
         const angle = ((bIdx * 115 + (m.id * 37)) % 360) * (Math.PI / 180);
-        const radiusDeg = Math.min(0.022, Math.max(0.012, (peakElev / 3000) * 0.018));
+        const radiusDeg = Math.min(0.026, Math.max(0.014, (peakElev / 3000) * 0.022));
         bcLat = Number((peakLat + Math.sin(angle) * radiusDeg).toFixed(6));
         bcLng = Number((peakLng + Math.cos(angle) * radiusDeg).toFixed(6));
       }
 
-      const bcElev = Math.max(150, Math.min(peakElev - 180, b.elevasi || Math.round(peakElev * 0.48)));
-      const posArr = b.pos || [];
-
-      const lastPosName = posArr.length > 0 ? (posArr[posArr.length - 1].namaPos || '').toLowerCase() : '';
-      const lastIsPeak = lastPosName.includes('puncak') || lastPosName.includes('bibir kawah') || lastPosName.includes('hargo dumilah');
-
-      const { waypoints, jalurGeo } = generateRidgeTrailAndPos(
-        bcLat,
-        bcLng,
-        peakLat,
-        peakLng,
-        posArr.length,
-        b.id,
-        lastIsPeak
-      );
-
-      const geoJson = JSON.stringify(jalurGeo);
+      const bcElev = Math.max(300, Math.min(peakElev - 250, b.elevasi || Math.round(peakElev * 0.48)));
 
       await prisma.basecamp.update({
         where: { id: b.id },
@@ -629,13 +490,17 @@ async function alignAllTrails() {
           elevasi: bcElev
         }
       });
-      await prisma.$executeRaw`UPDATE Basecamp SET jalurGeo = ${geoJson} WHERE id = ${b.id}`;
       updatedBasecamps++;
 
+      const posArr = b.pos || [];
       if (posArr.length === 0) continue;
 
+      const lastPosName = (posArr[posArr.length - 1].namaPos || '').toLowerCase();
+      const lastIsPeak = lastPosName.includes('puncak') || lastPosName.includes('bibir kawah') || lastPosName.includes('hargo dumilah');
+
+      const waypoints = generateRidgeWaypoints(bcLat, bcLng, peakLat, peakLng, posArr.length, b.id, lastIsPeak);
       const totalSteps = lastIsPeak ? posArr.length : posArr.length + 1;
-      const elevDiff = Math.max(120, peakElev - bcElev);
+      const elevDiff = Math.max(150, peakElev - bcElev);
 
       for (let i = 0; i < posArr.length; i++) {
         const p = posArr[i];
@@ -660,7 +525,7 @@ async function alignAllTrails() {
 
   console.log(`\n✅ Penyelarasan Penuh Selesai!`);
   console.log(`⛰️  Gunung diperbarui:   ${updatedMountains}`);
-  console.log(`🏕️  Basecamp diperbarui: ${updatedBasecamps} (termasuk geometri jalurGeo)`);
+  console.log(`🏕️  Basecamp diperbarui: ${updatedBasecamps}`);
   console.log(`📍 Titik Pos diperbarui: ${updatedPosCount}`);
   await prisma.$disconnect();
 }
