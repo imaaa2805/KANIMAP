@@ -230,6 +230,148 @@ async function loadStatistics() {
   }
 }
 
+// Daftar foto lanskap pegunungan tropis Indonesia sebagai fallback
+const DEFAULT_MOUNTAIN_PHOTOS = [
+  'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1544735716-392fe2489ffa?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1577717903315-1691ae25ab3f?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1588668214407-6ea9a6d8c272?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1559628233-100c798642d4?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1454496522488-7a8e488e8606?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1486870591958-9b9d0d1dda99?auto=format&fit=crop&w=900&q=80'
+];
+
+function getFallbackMountainPhoto(id = 0) {
+  const idx = Math.abs(parseInt(id, 10) || 0) % DEFAULT_MOUNTAIN_PHOTOS.length;
+  return DEFAULT_MOUNTAIN_PHOTOS[idx];
+}
+
+function getMountainImageUrl(m) {
+  if (!m) return DEFAULT_MOUNTAIN_PHOTOS[0];
+  if (m.gambar && String(m.gambar).trim() !== '') {
+    return String(m.gambar).trim();
+  }
+  return getFallbackMountainPhoto(m.id);
+}
+
+const WIKI_PHOTO_ALIASES = {
+  'gunung-penanggunan': ['Gunung Penanggungan', 'Mount Penanggungan'],
+  'gunung-cikurai': ['Gunung Cikuray', 'Mount Cikuray'],
+  'gunung-patuha': ['Gunung Patuha', 'Kawah Putih'],
+  'gunung-salak-2': ['Gunung Salak', 'Mount Salak'],
+  'gunung-api-purba-nglanggeran': ['Gunung Nglanggeran', 'Nglanggeran'],
+  'gunung-batu-jonggol': ['Gunung Batu Jonggol', 'Jonggol'],
+  'gunung-masigit-kareumbi': ['Gunung Masigit Kareumbi', 'Taman Buru Masigit Kareumbi'],
+  'gunung-sikunir': ['Bukit Sikunir', 'Dataran Tinggi Dieng'],
+  'gunung-prau': ['Gunung Prau', 'Dataran Tinggi Dieng'],
+  'gunung-pakuwaja': ['Gunung Pakuwaja', 'Dataran Tinggi Dieng'],
+  'gunung-bisma': ['Gunung Bisma', 'Wonosobo'],
+  'gunung-dorowati': ['Gunung Dorowati', 'Gunung Kawi'],
+  'gunung-pundak': ['Gunung Pundak', 'Gunung Welirang'],
+  'gunung-pangradinan': ['Gunung Pangradinan', 'Gunung Mandalawangi'],
+  'gunung-gentong': ['Pegunungan Baturagung', 'Gunung Nglanggeran']
+};
+
+function isValidWikiPhotoUrl(src) {
+  if (!src) return false;
+  return !/location|locator|map|icon|logo|coat_of_arms|flag|blank|relief|topographic|stamp|signature|\.svg|\.gif/i.test(src);
+}
+
+async function fetchSingleWikiPhoto(nama, slug) {
+  const candidates = WIKI_PHOTO_ALIASES[slug] || [
+    nama,
+    nama.replace(/^Gunung\s+/i, 'Mount ')
+  ];
+
+  for (const lang of ['id', 'en']) {
+    for (const title of candidates) {
+      try {
+        const url = `https://${lang}.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=pageimages&pithumbsize=900&redirects=1&format=json&origin=*`;
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const json = await res.json();
+        const pages = json?.query?.pages || {};
+        for (const p of Object.values(pages)) {
+          const src = p?.thumbnail?.source;
+          if (isValidWikiPhotoUrl(src)) return src;
+        }
+      } catch (_) {}
+    }
+  }
+
+  // Coba cari di Wikimedia Commons
+  for (const q of candidates) {
+    try {
+      const url = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent('filetype:bitmap ' + q)}&gsrlimit=5&prop=imageinfo&iiprop=url&iiurlwidth=900&format=json&origin=*`;
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const json = await res.json();
+      const pages = json?.query?.pages || {};
+      for (const p of Object.values(pages)) {
+        const thumb = p?.imageinfo?.[0]?.thumburl || p?.imageinfo?.[0]?.url;
+        if (isValidWikiPhotoUrl(thumb)) return thumb;
+      }
+    } catch (_) {}
+  }
+
+  return null;
+}
+
+let isSyncingWikiImages = false;
+async function syncRealWikipediaImages() {
+  if (isSyncingWikiImages || !Array.isArray(allMountains) || allMountains.length === 0) return;
+  // Cek gunung yang masih memakai foto placeholder Unsplash atau belum punya gambar
+  const needsRealPhoto = allMountains.filter(m => !m.gambar || m.gambar.includes('images.unsplash.com'));
+  if (needsRealPhoto.length === 0) return;
+
+  // Hindari re-fetch berulang kali di sesi browser yang sama jika sudah pernah disinkronkan
+  if (sessionStorage.getItem('kanimap_wiki_photos_synced') === '1') return;
+  isSyncingWikiImages = true;
+
+  try {
+    const updatedBatch = [];
+    const BATCH = 8;
+    for (let i = 0; i < needsRealPhoto.length; i += BATCH) {
+      const slice = needsRealPhoto.slice(i, i + BATCH);
+      const urls = await Promise.all(slice.map(m => fetchSingleWikiPhoto(m.nama, m.slug)));
+      slice.forEach((m, idx) => {
+        const foundUrl = urls[idx];
+        if (foundUrl) {
+          m.gambar = foundUrl;
+          updatedBatch.push({ id: m.id, gambar: foundUrl });
+        }
+      });
+    }
+
+    sessionStorage.setItem('kanimap_wiki_photos_synced', '1');
+
+    if (updatedBatch.length > 0) {
+      renderMountainCards();
+      if (selectedMountain) {
+        const detailImg = document.getElementById('detail-gunung-img');
+        if (detailImg) detailImg.src = getMountainImageUrl(selectedMountain);
+        const trailImg = document.getElementById('map-trail-img');
+        if (trailImg) {
+          trailImg.src = getMountainImageUrl(selectedMountain);
+          trailImg.classList.remove('hidden');
+        }
+      }
+      await fetch('/api/gunung/gambar-batch', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: updatedBatch })
+      });
+    }
+  } catch (err) {
+    console.warn('Sinkronisasi foto Wikipedia dilewati:', err.message);
+  } finally {
+    isSyncingWikiImages = false;
+  }
+}
+
 /**
  * 3. Load Mountains and Render List & Pins
  */
@@ -242,6 +384,9 @@ async function loadMountains() {
     allMountains = json.data;
     renderMountainCards();
     renderMountainPins();
+
+    // Sinkronkan foto asli Wikipedia/Wikimedia Commons di latar belakang jika ada yang belum terisi
+    syncRealWikipediaImages();
 
     // Tampilkan peta Pulau Jawa secara utuh tanpa langsung zoom ke satu gunung
     if (map && REGION_BOUNDS.all) {
@@ -462,30 +607,40 @@ function renderMountainCards() {
       `;
     }
 
+    const imgUrl = getMountainImageUrl(m);
+    const fallbackUrl = getFallbackMountainPhoto(m.id);
+
     return `
       <div onclick="selectMountain(${m.id}, true)" class="mountain-item group cursor-pointer p-3.5 rounded-2xl ${bgClass} transition-all shadow-xs border border-surface-container/60" data-id="${m.id}">
-        <div class="flex items-start justify-between gap-1 mb-1">
-          <div>
-            <span class="font-headline text-[10px] uppercase font-bold tracking-wider text-on-surface-variant block truncate max-w-[190px]">${m.provinsi} · ${m.kabupaten}</span>
-            <h4 class="font-headline font-bold text-base text-primary group-hover:text-primary-container leading-tight mt-0.5">${m.nama}</h4>
-          </div>
-          <div class="flex items-center gap-1">
+        <!-- Banner Foto Gunung -->
+        <div class="relative w-full h-28 rounded-xl overflow-hidden mb-2.5 bg-surface-container border border-surface-container/60">
+          <img src="${imgUrl}" alt="${m.nama}" loading="lazy" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" onerror="this.onerror=null;this.src='${fallbackUrl}';">
+          <div class="absolute inset-0 bg-gradient-to-t from-black/75 via-black/15 to-transparent pointer-events-none"></div>
+          <div class="absolute top-2 left-2 right-2 flex items-center justify-between gap-1">
             ${statusBadge}
-            <button onclick="event.stopPropagation(); openTripPlannerModal(${m.id});" class="px-2 py-0.5 rounded-md bg-primary/10 hover:bg-primary text-primary hover:text-white transition-all font-headline font-bold text-[10px] flex items-center gap-0.5" title="Buka Trip Planner & Estimasi Waktu ${m.nama}">
-              <span class="material-symbols-outlined text-[13px]">schedule</span>
-              <span>Trip Plan</span>
-            </button>
-            <button onclick="event.stopPropagation(); openGunungModal(${m.id});" class="p-1 rounded-md hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-colors" title="Rename / Edit Gunung">
-              <span class="material-symbols-outlined text-[14px]">edit</span>
-            </button>
+            <div class="flex items-center gap-1">
+              <button onclick="event.stopPropagation(); openTripPlannerModal(${m.id});" class="px-2 py-0.5 rounded-md bg-black/60 hover:bg-primary text-white backdrop-blur-xs transition-all font-headline font-bold text-[10px] flex items-center gap-0.5 shadow-xs" title="Buka Trip Planner & Estimasi Waktu ${m.nama}">
+                <span class="material-symbols-outlined text-[12px]">schedule</span>
+                <span>Trip Plan</span>
+              </button>
+              <button onclick="event.stopPropagation(); openGunungModal(${m.id});" class="px-1.5 py-0.5 rounded-md bg-black/60 hover:bg-primary text-white backdrop-blur-xs transition-colors flex items-center gap-0.5 text-[10px] font-headline font-bold shadow-xs" title="Edit Gunung / Ganti Foto">
+                <span class="material-symbols-outlined text-[13px]">photo_camera</span>
+              </button>
+            </div>
+          </div>
+          <div class="absolute bottom-2 left-2.5 right-2.5 flex items-end justify-between gap-2 pointer-events-none">
+            <div class="min-w-0">
+              <span class="font-headline text-[9px] uppercase font-bold tracking-wider text-white/85 block truncate">${m.provinsi} · ${m.kabupaten}</span>
+              <h4 class="font-headline font-bold text-sm sm:text-base text-white leading-tight truncate drop-shadow-xs">${m.nama}</h4>
+            </div>
+            <span class="px-2 py-0.5 rounded-lg bg-black/60 text-white font-mono font-bold text-[11px] backdrop-blur-xs shrink-0 flex items-center gap-0.5">
+              <span class="material-symbols-outlined text-[13px] text-amber-300">filter_hdr</span>
+              ${m.ketinggian.toLocaleString('id-ID')} mdpl
+            </span>
           </div>
         </div>
         
-        <div class="flex items-center gap-2.5 text-on-surface-variant mt-2 text-xs flex-wrap">
-          <span class="flex items-center gap-1 font-headline font-bold text-on-surface">
-            <span class="material-symbols-outlined text-[15px] text-primary">filter_hdr</span>
-            ${m.ketinggian.toLocaleString('id-ID')} mdpl
-          </span>
+        <div class="flex items-center justify-between gap-2 text-on-surface-variant mt-1 text-xs flex-wrap">
           ${posBadgeHtml}
           <span class="flex items-center gap-1 font-headline font-medium text-on-surface-variant">
             <span class="material-symbols-outlined text-[15px] text-secondary">alt_route</span>
@@ -571,6 +726,28 @@ function renderMountainPins() {
 
     const marker = L.marker([m.latitude, m.longitude], { icon: iconObj })
       .addTo(mountainMarkersGroup);
+
+    const imgUrl = getMountainImageUrl(m);
+    const fallbackUrl = getFallbackMountainPhoto(m.id);
+    const pinPopupHtml = `
+      <div class="p-2.5 text-xs flex flex-col gap-2 min-w-[230px]">
+        <div class="w-full h-28 rounded-xl overflow-hidden bg-surface-container relative border border-surface-container">
+          <img src="${imgUrl}" alt="${m.nama}" class="w-full h-full object-cover" onerror="this.onerror=null;this.src='${fallbackUrl}';">
+          <span class="absolute bottom-1.5 right-1.5 px-2 py-0.5 rounded-md bg-black/65 text-white font-mono font-bold text-[10px] backdrop-blur-xs">${m.ketinggian.toLocaleString('id-ID')} mdpl</span>
+        </div>
+        <div>
+          <span class="text-[10px] font-headline font-bold uppercase text-on-surface-variant block">${m.provinsi} · ${m.kabupaten}</span>
+          <h4 class="font-headline font-bold text-sm text-primary leading-tight">${m.nama}</h4>
+        </div>
+        <div class="flex items-center justify-between pt-1 border-t border-surface-container text-[11px]">
+          <span class="font-headline font-semibold text-on-surface-variant">${m.basecamps.length} Jalur Via Resmi</span>
+          <button onclick="openGunungModal(${m.id})" class="text-primary hover:underline font-headline font-bold flex items-center gap-0.5">
+            <span class="material-symbols-outlined text-[13px]">photo_camera</span> Edit / Foto
+          </button>
+        </div>
+      </div>
+    `;
+    marker.bindPopup(pinPopupHtml);
 
     marker.on('click', () => {
       selectMountain(m.id, true);
@@ -994,11 +1171,17 @@ function drawMountainTrail(mountain, basecamp) {
         ? `Total Tanjakan: <strong class="text-primary font-mono">${summary.totalGainFormatted}</strong>`
         : `Tanjakan dari BC: <strong class="text-secondary font-mono">+${gainFromBc.toLocaleString('id-ID')} mdpl</strong>`;
 
+    const mImgUrl = getMountainImageUrl(mountain);
+    const mFallbackUrl = getFallbackMountainPhoto(mountain.id);
+
     const popupHtml = `
       <div class="p-3 text-xs flex flex-col gap-1.5 min-w-[240px]">
+        <div class="w-full h-24 rounded-lg overflow-hidden bg-surface-container relative border border-surface-container mb-0.5">
+          <img src="${mImgUrl}" alt="${mountain.nama}" class="w-full h-full object-cover" onerror="this.onerror=null;this.src='${mFallbackUrl}';">
+          <span class="absolute top-1.5 right-1.5 px-2 py-0.5 rounded-full bg-black/70 text-white font-headline font-bold text-[9px] backdrop-blur-xs">${badgeText}</span>
+        </div>
         <div class="flex items-center justify-between border-b border-surface-container pb-1">
           <span class="font-headline font-bold text-[10px] uppercase text-secondary">${mountain.nama} · Via ${basecamp.jalurVia}</span>
-          <span class="px-2 py-0.5 rounded-full bg-surface-container text-on-surface font-headline font-bold text-[10px]">${badgeText}</span>
         </div>
         <h4 class="font-headline font-bold text-sm text-primary leading-tight mt-0.5">${wp.name}</h4>
         <div class="flex items-center justify-between text-on-surface-variant text-[11px] font-mono">
@@ -1128,6 +1311,12 @@ function updateMapTrailSummary(mountain, basecamp, showBanner = false) {
 
   const titleEl = document.getElementById('map-trail-title');
   if (titleEl) titleEl.innerText = `${mountain.nama} · Via ${basecamp.jalurVia}`;
+
+  const trailImgEl = document.getElementById('map-trail-img');
+  if (trailImgEl) {
+    trailImgEl.src = getMountainImageUrl(mountain);
+    trailImgEl.classList.remove('hidden');
+  }
 
   const distEl = document.getElementById('map-trail-dist');
   if (distEl) distEl.innerText = `${summary.totalDistanceFormatted}`;
@@ -1671,6 +1860,15 @@ function renderDetailView() {
 
   document.getElementById('detail-gunung-name').innerText = m.nama;
   document.getElementById('detail-gunung-prov').innerText = `${m.provinsi} · ${m.kabupaten}`;
+
+  const detailImg = document.getElementById('detail-gunung-img');
+  if (detailImg) {
+    detailImg.src = getMountainImageUrl(m);
+    detailImg.onerror = () => {
+      detailImg.onerror = null;
+      detailImg.src = getFallbackMountainPhoto(m.id);
+    };
+  }
 
   if (selectedBasecamp) {
     const activeWps = getExpeditionWaypoints(m, selectedBasecamp);
@@ -2233,6 +2431,68 @@ async function deleteBasecampItem(id) {
 /**
  * 14B. Admin: Kelola & Rename Data Gunung + Jalur Via & Pos (CRUD)
  */
+function updateGunungModalImagePreview(url) {
+  const preview = document.getElementById('form-gunung-img-preview');
+  if (!preview) return;
+  const trimmed = String(url || '').trim();
+  preview.src = trimmed || DEFAULT_MOUNTAIN_PHOTOS[0];
+}
+
+function handleGunungImageFile(input) {
+  const file = input?.files?.[0];
+  if (!file) return;
+
+  if (!file.type.startsWith('image/')) {
+    showToast('Pilih file berformat gambar (JPG, PNG, WebP)', 'warning');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const img = new Image();
+    img.onload = () => {
+      // Kompres & resize gambar maksimal lebar 1000px agar ringan disimpan ke server
+      const maxW = 1000;
+      const scale = img.width > maxW ? maxW / img.width : 1;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.84);
+      const gambarInput = document.getElementById('form-gunung-gambar');
+      if (gambarInput) gambarInput.value = dataUrl;
+      updateGunungModalImagePreview(dataUrl);
+      showToast('📷 Foto berhasil dimuat! Klik "Simpan Gunung & Jalur" untuk menerapkan.', 'success');
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function autoFetchMountainPhotoInModal() {
+  const nama = (document.getElementById('form-gunung-nama')?.value || '').trim();
+  if (!nama) {
+    showToast('Isi Nama Gunung terlebih dahulu', 'warning');
+    return;
+  }
+  showToast(`Mencari foto asli ${nama} di Wikipedia / Wikimedia Commons...`, 'info');
+  const slug = nama.toLowerCase().replace(/\s+/g, '-').replace(/[^\w\-]+/g, '');
+  const found = await fetchSingleWikiPhoto(nama, slug);
+  if (found) {
+    const gambarInput = document.getElementById('form-gunung-gambar');
+    if (gambarInput) gambarInput.value = found;
+    updateGunungModalImagePreview(found);
+    showToast(`📷 Foto asli ${nama} ditemukan dari Wikipedia!`, 'success');
+  } else {
+    const fallback = getFallbackMountainPhoto(Date.now());
+    const gambarInput = document.getElementById('form-gunung-gambar');
+    if (gambarInput) gambarInput.value = fallback;
+    updateGunungModalImagePreview(fallback);
+    showToast(`Menggunakan foto ilustrasi pegunungan untuk ${nama}`, 'info');
+  }
+}
+
 function openGunungModal(id = null) {
   const modal = document.getElementById('gunung-modal');
   if (!modal) return;
@@ -2246,6 +2506,7 @@ function openGunungModal(id = null) {
   if (document.getElementById('form-gunung-via')) document.getElementById('form-gunung-via').value = '';
   if (document.getElementById('form-gunung-bc-elev')) document.getElementById('form-gunung-bc-elev').value = '';
   if (document.getElementById('form-gunung-pos-names')) document.getElementById('form-gunung-pos-names').value = '';
+  if (document.getElementById('form-gunung-file')) document.getElementById('form-gunung-file').value = '';
 
   if (id) {
     const m = allMountains.find(item => item.id === id);
@@ -2260,6 +2521,9 @@ function openGunungModal(id = null) {
       document.getElementById('form-gunung-deskripsi').value = m.deskripsi || '';
       document.getElementById('form-gunung-lat').value = m.latitude || '';
       document.getElementById('form-gunung-lng').value = m.longitude || '';
+      const imgVal = m.gambar || getMountainImageUrl(m);
+      if (document.getElementById('form-gunung-gambar')) document.getElementById('form-gunung-gambar').value = imgVal;
+      updateGunungModalImagePreview(imgVal);
       if (document.getElementById('form-gunung-pos-count')) document.getElementById('form-gunung-pos-count').value = '';
       btnDelete?.classList.remove('hidden');
 
@@ -2289,6 +2553,8 @@ function openGunungModal(id = null) {
     modalTitle.innerText = 'Tambah Gunung, Jalur Via & Pos Baru';
     document.getElementById('gunung-form').reset();
     document.getElementById('form-gunung-id').value = '';
+    if (document.getElementById('form-gunung-gambar')) document.getElementById('form-gunung-gambar').value = '';
+    updateGunungModalImagePreview(DEFAULT_MOUNTAIN_PHOTOS[0]);
     if (document.getElementById('form-gunung-pos-count')) document.getElementById('form-gunung-pos-count').value = 3;
     existingSection?.classList.add('hidden');
     btnDelete?.classList.add('hidden');
@@ -2321,6 +2587,7 @@ async function submitGunungForm(e) {
     kabupaten: document.getElementById('form-gunung-kabupaten').value,
     statusJalur: document.getElementById('form-gunung-status').value,
     deskripsi: document.getElementById('form-gunung-deskripsi').value,
+    gambar: document.getElementById('form-gunung-gambar')?.value || undefined,
     latitude: parseFloat(document.getElementById('form-gunung-lat').value) || undefined,
     longitude: parseFloat(document.getElementById('form-gunung-lng').value) || undefined,
     jalurVia: document.getElementById('form-gunung-via')?.value || '',
@@ -3923,3 +4190,483 @@ document.addEventListener('keydown', (e) => {
 });
 
 
+
+
+// ============================================================
+// 🤖 AI REKOMENDASI GUNUNG — GRADE 1-5 (Pemula s/d Expert)
+// ============================================================
+
+let aiActiveGrade = 'all';
+let aiRekomendasiData = null;      // cache response API
+let aiFilteredData = [];           // data setelah filter
+
+const AI_GRADE_RUBRIC = {
+  all: {
+    color: '#10b981',
+    icon: 'psychology',
+    title: 'Semua Level Grade 1–5',
+    desc: 'Menampilkan seluruh gunung dari yang paling ramah pemula hingga ekspedisi ahli.',
+    elevRange: 'Seluruh Ketinggian (367 – 3.676 mdpl)',
+    durRange: 'Tektok Santai s/d Ekspedisi 5 Hari'
+  },
+  1: {
+    color: '#10b981',
+    icon: 'directions_walk',
+    title: 'Grade 1 · Pemula Nol Pengalaman',
+    desc: 'First-timer, wisata keluarga, pelajar. Jalur anak tangga wisata, bukit taman, jalur berpagar. Tidak memerlukan latihan khusus.',
+    elevRange: '< 1.100 mdpl',
+    durRange: '1 – 3 Jam PP (Tektok Santai)'
+  },
+  2: {
+    color: '#06b6d4',
+    icon: 'hiking',
+    title: 'Grade 2 · Pemula Siap Camp',
+    desc: 'Sudah yakin naik gunung, siap bermalam pertama kali. Jalur terkelola rapi, ada warung/pos, waktu tempuh moderat.',
+    elevRange: '1.100 – 2.600 mdpl',
+    durRange: '2 – 4.5 Jam Naik (Camp 2D1N)'
+  },
+  3: {
+    color: '#3b82f6',
+    icon: 'terrain',
+    title: 'Grade 3 · Menengah',
+    desc: 'Sudah pernah mendaki 2–3x. Siap menghadapi tanjakan panjang, akar pohon, sabana berangin, dan bermalam di suhu dingin.',
+    elevRange: '2.500 – 3.250 mdpl',
+    durRange: '5 – 8 Jam Naik (Camp 2D1N)'
+  },
+  4: {
+    color: '#f97316',
+    icon: 'landscape',
+    title: 'Grade 4 · Mahir & Berpengalaman',
+    desc: 'Pendaki mahir yang sering naik gunung tinggi. Siap menghadapi elevasi gain ekstrem, medan berbatu cadas, suhu beku.',
+    elevRange: '> 3.000 mdpl atau medan sangat teknis',
+    durRange: '7 – 12 Jam Naik (Camp 2D1N–3D2N)'
+  },
+  5: {
+    color: '#ef4444',
+    icon: 'filter_hdr',
+    title: 'Grade 5 · Expert / Ekspedisi Ekstrem',
+    desc: 'Mountaineer berpengalaman tinggi. Pemanjatan teknis, ekspedisi multi-hari, jalur berjurang vertikal, atau rute terpanjang Pulau Jawa.',
+    elevRange: '> 3.300 mdpl / Jalur Teknis Ekstrem / Ekspedisi 3–5 Hari',
+    durRange: '3 – 5 Hari atau Medan Pemanjatan Berbahaya'
+  }
+};
+
+/** Buka modal AI Rekomendasi */
+function openAiRekomendasiModal() {
+  const modal = document.getElementById('ai-rekomendasi-modal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  modal.style.display = 'flex';
+  // Render rubrik banner default
+  renderAiRubricBanner(aiActiveGrade);
+  // Load data jika belum ada
+  if (!aiRekomendasiData) {
+    fetchAiRekomendasi('all');
+  } else {
+    applyAiFilters();
+  }
+}
+
+/** Tutup modal AI Rekomendasi */
+function closeAiRekomendasiModal() {
+  const modal = document.getElementById('ai-rekomendasi-modal');
+  if (modal) {
+    modal.classList.add('hidden');
+    modal.style.display = 'none';
+  }
+}
+
+/** Toggle Quiz Panel */
+function toggleAiQuizPanel() {
+  const panel = document.getElementById('ai-quiz-panel');
+  if (!panel) return;
+  panel.classList.toggle('hidden');
+}
+
+/** Hitung grade dari kuis dan terapkan filter */
+function calculateAiQuizLevel() {
+  const p = parseInt(document.getElementById('quiz-pengalaman')?.value || 1);
+  const s = parseInt(document.getElementById('quiz-stamina')?.value || 1);
+  const m = parseInt(document.getElementById('quiz-medan')?.value || 1);
+  const avg = (p + s + m) / 3;
+  let grade;
+  if (avg <= 1.5) grade = 1;
+  else if (avg <= 2.5) grade = 2;
+  else if (avg <= 3.5) grade = 3;
+  else if (avg <= 4.5) grade = 4;
+  else grade = 5;
+
+  // Close quiz, set filter, reload
+  toggleAiQuizPanel();
+  setAiGradeFilter(grade);
+  showToast(`AI menilai Level Anda: Grade ${grade} — ${AI_GRADE_RUBRIC[grade].title}`, 'success');
+}
+
+/** Set grade filter pill aktif */
+function setAiGradeFilter(grade) {
+  aiActiveGrade = grade;
+  // Update pill styling
+  document.querySelectorAll('.ai-grade-pill').forEach(btn => {
+    const bg = btn.getAttribute('data-grade') == grade
+      ? getGradeActiveBg(grade)
+      : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high';
+    // Reset classes
+    btn.className = btn.className
+      .replace(/bg-\S+\s?text-\S+\s?(hover:bg-\S+)?/g, '')
+      .trim();
+    btn.classList.add('ai-grade-pill', 'px-3', 'py-1.5', 'rounded-full', 'text-xs',
+      'font-headline', 'font-bold', 'shrink-0', 'transition-all');
+    if (btn.getAttribute('data-grade') == grade) {
+      btn.classList.add(...getGradeActiveBg(grade).split(' '));
+    } else {
+      btn.classList.add('bg-surface-container', 'text-on-surface-variant', 'hover:bg-surface-container-high');
+      if (btn.getAttribute('data-grade') !== 'all') btn.classList.add('flex', 'items-center', 'gap-1.5');
+    }
+  });
+
+  renderAiRubricBanner(grade);
+  fetchAiRekomendasi(grade);
+}
+
+function getGradeActiveBg(grade) {
+  const map = {
+    'all': 'bg-emerald-700 text-white',
+    1: 'bg-emerald-600 text-white',
+    2: 'bg-cyan-600 text-white',
+    3: 'bg-blue-600 text-white',
+    4: 'bg-amber-600 text-white',
+    5: 'bg-red-600 text-white'
+  };
+  return map[grade] || 'bg-emerald-700 text-white';
+}
+
+/** Render Grade Rubric Banner */
+function renderAiRubricBanner(grade) {
+  const banner = document.getElementById('ai-rubric-banner');
+  if (!banner) return;
+  const rubric = AI_GRADE_RUBRIC[grade] || AI_GRADE_RUBRIC['all'];
+  banner.innerHTML = `
+    <div class="flex items-center gap-2 shrink-0">
+      <span class="material-symbols-outlined text-[22px]" style="color:${rubric.color}">${rubric.icon}</span>
+      <div>
+        <span class="font-headline font-bold text-sm text-on-surface">${rubric.title}</span>
+        <p class="text-on-surface-variant leading-relaxed mt-0.5 max-w-xl">${rubric.desc}</p>
+      </div>
+    </div>
+    <div class="flex gap-4 sm:ml-auto shrink-0 text-[11px]">
+      <div>
+        <span class="font-headline font-bold text-on-surface-variant uppercase tracking-wide block">Elevasi</span>
+        <span class="font-headline font-bold text-on-surface">${rubric.elevRange}</span>
+      </div>
+      <div>
+        <span class="font-headline font-bold text-on-surface-variant uppercase tracking-wide block">Durasi</span>
+        <span class="font-headline font-bold text-on-surface">${rubric.durRange}</span>
+      </div>
+    </div>
+  `;
+}
+
+/** Fetch data AI dari API backend */
+async function fetchAiRekomendasi(grade) {
+  const grid = document.getElementById('ai-mountains-grid');
+  const count = document.getElementById('ai-results-count');
+  if (grid) grid.innerHTML = `<div class="col-span-3 flex items-center justify-center py-12 text-on-surface-variant text-xs gap-2"><span class="material-symbols-outlined animate-spin text-[20px] text-emerald-600">progress_activity</span><span>AI sedang memproses asesmen...</span></div>`;
+  if (count) count.textContent = 'Memuat rekomendasi AI...';
+
+  try {
+    const prov = document.getElementById('ai-filter-prov')?.value || 'all';
+    const durasi = document.getElementById('ai-filter-durasi')?.value || 'all';
+    const search = document.getElementById('ai-search-input')?.value || '';
+
+    let url = `/api/ai-rekomendasi?grade=${grade === 'all' ? 'all' : grade}&provinsi=${prov}&durasi=${durasi}`;
+    if (search.trim()) url += `&search=${encodeURIComponent(search.trim())}`;
+
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+
+    aiRekomendasiData = json;
+    aiFilteredData = json.data || [];
+
+    renderAiMountainCards(aiFilteredData, json);
+  } catch (err) {
+    console.error('Error fetchAiRekomendasi:', err);
+    if (grid) grid.innerHTML = `<div class="col-span-3 flex flex-col items-center justify-center py-12 gap-3 text-on-surface-variant"><span class="material-symbols-outlined text-[36px] text-error">error</span><span class="text-xs font-semibold">Gagal memuat data. Pastikan server aktif.</span><span class="text-[11px]">${err.message}</span></div>`;
+    if (count) count.textContent = 'Gagal memuat rekomendasi';
+  }
+}
+
+/** Apply client-side filters (re-call API with filters) */
+function applyAiFilters() {
+  fetchAiRekomendasi(aiActiveGrade);
+}
+
+/** Render card gunung di grid */
+function renderAiMountainCards(mountains, meta) {
+  const grid = document.getElementById('ai-mountains-grid');
+  const count = document.getElementById('ai-results-count');
+
+  if (count) {
+    count.textContent = `${mountains.length} Gunung Ditemukan${aiActiveGrade !== 'all' ? ` (Grade ${aiActiveGrade})` : ' (Semua Grade)'}`;
+  }
+
+  if (!mountains || mountains.length === 0) {
+    grid.innerHTML = `<div class="col-span-3 flex flex-col items-center justify-center py-14 gap-3 text-on-surface-variant">
+      <span class="material-symbols-outlined text-[42px]">search_off</span>
+      <span class="font-headline font-bold text-sm">Tidak ada gunung yang sesuai filter</span>
+      <span class="text-xs">Coba ubah filter grade, provinsi, atau kata kunci pencarian</span>
+    </div>`;
+    return;
+  }
+
+  grid.innerHTML = mountains.map(m => buildAiMountainCard(m)).join('');
+}
+
+function buildAiMountainCard(m) {
+  const ai = m.aiAssessment;
+  const img = m.gambar
+    ? `<img src="${m.gambar}" alt="${m.nama}" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" onerror="this.onerror=null;this.src='/images/kanimap-avatar.jpg'">`
+    : `<div class="w-full h-full flex items-center justify-center bg-primary-container"><span class="material-symbols-outlined text-[40px] text-on-primary-container opacity-40">terrain</span></div>`;
+
+  const statusColor = m.statusJalur === 'Buka'
+    ? 'bg-emerald-500/90 text-white'
+    : m.statusJalur === 'Waspada'
+    ? 'bg-amber-500/90 text-white'
+    : 'bg-red-600/90 text-white';
+
+  const matchBarW = Math.min(100, Math.max(0, ai.matchScore));
+  const matchColor = ai.grade <= 2 ? 'bg-emerald-500' : ai.grade === 3 ? 'bg-blue-500' : ai.grade === 4 ? 'bg-amber-500' : 'bg-red-500';
+
+  const gradeDotColor = {1:'bg-emerald-500',2:'bg-cyan-500',3:'bg-blue-500',4:'bg-amber-500',5:'bg-red-500'}[ai.grade] || 'bg-primary';
+
+  const bcInfo = m.basecampsCount > 0
+    ? `${m.basecampsCount} Jalur/Basecamp`
+    : 'Jalur data tersedia';
+
+  return `
+  <div class="ai-mountain-card group bg-surface-container-lowest rounded-2xl border border-surface-container overflow-hidden shadow-sm hover:shadow-md transition-all duration-300 flex flex-col cursor-pointer" onclick="onAiCardClick(${m.id})">
+    <!-- Foto Gunung -->
+    <div class="relative w-full h-40 overflow-hidden bg-surface-container shrink-0">
+      ${img}
+      <!-- Grade Badge -->
+      <div class="absolute top-2.5 left-2.5 flex items-center gap-1 px-2 py-0.5 rounded-full bg-black/60 backdrop-blur-sm text-white text-[10px] font-headline font-black">
+        <span class="w-2 h-2 rounded-full ${gradeDotColor} inline-block shrink-0"></span>
+        ${ai.gradeBadge}
+      </div>
+      <!-- Status Jalur -->
+      <div class="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full text-[10px] font-headline font-bold ${statusColor}">
+        ${m.statusJalur}
+      </div>
+      <!-- Ketinggian -->
+      <div class="absolute bottom-2.5 left-2.5 px-2 py-0.5 rounded-lg bg-black/60 text-white backdrop-blur-sm text-[11px] font-mono font-bold flex items-center gap-0.5">
+        <span class="material-symbols-outlined text-[13px] text-amber-300">filter_hdr</span>
+        ${(m.ketinggian || 0).toLocaleString('id-ID')} mdpl
+      </div>
+      <!-- Match Score -->
+      <div class="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded-lg bg-black/60 text-white backdrop-blur-sm text-[11px] font-headline font-bold flex items-center gap-0.5">
+        <span class="material-symbols-outlined text-[13px] text-emerald-400">verified</span>
+        ${ai.matchScore}% match
+      </div>
+    </div>
+
+    <!-- Card Body -->
+    <div class="p-3.5 flex flex-col gap-2.5 flex-1">
+      <!-- Nama & Lokasi -->
+      <div>
+        <h4 class="font-headline font-bold text-sm text-on-surface leading-tight">${m.nama}</h4>
+        <p class="text-[11px] text-on-surface-variant mt-0.5">${m.provinsi} · ${m.kabupaten || ''}</p>
+      </div>
+
+      <!-- AI Match Score Bar -->
+      <div>
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-[10px] font-headline font-bold text-on-surface-variant uppercase tracking-wide">AI Match Score</span>
+          <span class="text-[10px] font-mono font-bold" style="color:${ai.gradeColor}">${ai.matchScore}%</span>
+        </div>
+        <div class="w-full bg-surface-container rounded-full h-1.5">
+          <div class="h-1.5 rounded-full ${matchColor} transition-all duration-500" style="width:${matchBarW}%"></div>
+        </div>
+      </div>
+
+      <!-- AI Summary -->
+      <p class="text-[11px] text-on-surface-variant leading-relaxed line-clamp-2">${ai.aiSummary}</p>
+
+      <!-- Info Tags Row -->
+      <div class="flex flex-wrap gap-1.5 text-[10px]">
+        <span class="px-2 py-0.5 rounded-full bg-surface-container text-on-surface-variant font-headline font-semibold flex items-center gap-0.5">
+          <span class="material-symbols-outlined text-[11px]">schedule</span>
+          ${ai.estimatedAscentHours}
+        </span>
+        <span class="px-2 py-0.5 rounded-full bg-surface-container text-on-surface-variant font-headline font-semibold flex items-center gap-0.5">
+          <span class="material-symbols-outlined text-[11px]">night_shelter</span>
+          ${ai.recommendedDuration.split('(')[0].trim()}
+        </span>
+        <span class="px-2 py-0.5 rounded-full bg-surface-container text-on-surface-variant font-headline font-semibold flex items-center gap-0.5">
+          <span class="material-symbols-outlined text-[11px]">holiday_village</span>
+          ${bcInfo}
+        </span>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="flex items-center gap-2 mt-auto pt-1 border-t border-surface-container">
+        <button onclick="event.stopPropagation(); onAiCardClick(${m.id})" class="flex-1 py-1.5 rounded-xl text-[11px] font-headline font-bold flex items-center justify-center gap-1 transition-all" style="background:${ai.gradeColor}20; color:${ai.gradeColor}; border:1px solid ${ai.gradeColor}50">
+          <span class="material-symbols-outlined text-[14px]">map</span>
+          Lihat di Peta
+        </button>
+        <button onclick="event.stopPropagation(); showAiDetailModal(${m.id})" class="flex-1 py-1.5 rounded-xl text-[11px] font-headline font-bold flex items-center justify-center gap-1 bg-surface-container hover:bg-surface-container-high transition-all text-on-surface border border-surface-container">
+          <span class="material-symbols-outlined text-[14px]">info</span>
+          Detail AI
+        </button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/** Klik card → tutup modal + pilih gunung di peta */
+function onAiCardClick(mountainId) {
+  closeAiRekomendasiModal();
+  setTimeout(() => {
+    selectMountain(mountainId, true);
+    switchView('map');
+  }, 150);
+}
+
+/** Tampilkan Detail AI untuk satu gunung (overlay di dalam modal) */
+function showAiDetailModal(mountainId) {
+  if (!aiRekomendasiData || !aiRekomendasiData.data) return;
+  const m = aiRekomendasiData.data.find(x => x.id === mountainId);
+  if (!m) return;
+  const ai = m.aiAssessment;
+
+  // Build a "detail overlay" over the grid
+  const grid = document.getElementById('ai-mountains-grid');
+  if (!grid) return;
+
+  const gearArr = Array.isArray(ai.essentialGear)
+    ? ai.essentialGear
+    : (typeof ai.essentialGear === 'string' ? ai.essentialGear.split(', ') : [ai.essentialGear]);
+
+  grid.innerHTML = `
+  <div class="col-span-3">
+    <button onclick="applyAiFilters()" class="mb-4 flex items-center gap-1 text-xs font-headline font-bold text-emerald-700 hover:underline">
+      <span class="material-symbols-outlined text-[16px]">arrow_back</span>
+      Kembali ke Daftar
+    </button>
+    <div class="bg-surface-container-lowest border border-surface-container rounded-2xl overflow-hidden">
+      <!-- Detail Header -->
+      <div class="p-4 sm:p-5 flex items-start gap-3 border-b border-surface-container" style="background:linear-gradient(135deg, ${ai.gradeColor}18, transparent)">
+        <div class="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 border-2" style="background:${ai.gradeColor}20;border-color:${ai.gradeColor}60">
+          <span class="material-symbols-outlined text-[24px]" style="color:${ai.gradeColor}">terrain</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h3 class="font-headline font-bold text-base sm:text-lg text-on-surface">${m.nama}</h3>
+            <span class="px-2.5 py-0.5 rounded-full text-[10px] font-headline font-black text-white" style="background:${ai.gradeColor}">${ai.gradeBadge}</span>
+          </div>
+          <p class="text-xs text-on-surface-variant mt-0.5">${m.provinsi} · ${m.kabupaten || ''} · ${(m.ketinggian||0).toLocaleString('id-ID')} mdpl</p>
+          <p class="text-xs text-on-surface mt-1 leading-relaxed">${ai.aiSummary}</p>
+        </div>
+        <div class="shrink-0 text-right">
+          <span class="font-mono font-black text-2xl" style="color:${ai.gradeColor}">${ai.matchScore}%</span>
+          <p class="text-[10px] text-on-surface-variant font-semibold">AI Match</p>
+        </div>
+      </div>
+
+      <!-- Detail Sections -->
+      <div class="p-4 sm:p-5 grid grid-cols-1 md:grid-cols-2 gap-5 text-xs">
+
+        <!-- Karakteristik Jalur -->
+        <div class="flex flex-col gap-1.5">
+          <div class="flex items-center gap-1.5 mb-1">
+            <span class="material-symbols-outlined text-[16px]" style="color:${ai.gradeColor}">alt_route</span>
+            <span class="font-headline font-bold text-sm text-on-surface">Karakteristik Jalur</span>
+          </div>
+          <p class="text-on-surface-variant leading-relaxed">${ai.trailCharacteristics}</p>
+        </div>
+
+        <!-- Estimasi Waktu -->
+        <div class="flex flex-col gap-1.5">
+          <div class="flex items-center gap-1.5 mb-1">
+            <span class="material-symbols-outlined text-[16px]" style="color:${ai.gradeColor}">schedule</span>
+            <span class="font-headline font-bold text-sm text-on-surface">Estimasi Pendakian</span>
+          </div>
+          <div class="flex flex-col gap-1">
+            <div class="flex items-center justify-between p-2 rounded-xl bg-surface-container">
+              <span class="text-on-surface-variant">Waktu Naik</span>
+              <span class="font-headline font-bold text-on-surface">${ai.estimatedAscentHours}</span>
+            </div>
+            <div class="flex items-center justify-between p-2 rounded-xl bg-surface-container">
+              <span class="text-on-surface-variant">Rekomendasi Durasi</span>
+              <span class="font-headline font-bold text-on-surface">${ai.recommendedDuration}</span>
+            </div>
+            <div class="flex items-center justify-between p-2 rounded-xl bg-surface-container">
+              <span class="text-on-surface-variant">Elevasi Gain</span>
+              <span class="font-headline font-bold text-on-surface">±${(m.elevGain||0).toLocaleString('id-ID')} m</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Persiapan Fisik -->
+        <div class="flex flex-col gap-1.5">
+          <div class="flex items-center gap-1.5 mb-1">
+            <span class="material-symbols-outlined text-[16px]" style="color:${ai.gradeColor}">fitness_center</span>
+            <span class="font-headline font-bold text-sm text-on-surface">Persiapan Fisik</span>
+          </div>
+          <p class="text-on-surface-variant leading-relaxed">${ai.physicalPreparation}</p>
+        </div>
+
+        <!-- Perlengkapan Wajib -->
+        <div class="flex flex-col gap-1.5">
+          <div class="flex items-center gap-1.5 mb-1">
+            <span class="material-symbols-outlined text-[16px]" style="color:${ai.gradeColor}">backpack</span>
+            <span class="font-headline font-bold text-sm text-on-surface">Perlengkapan Wajib</span>
+          </div>
+          <ul class="flex flex-col gap-0.5">
+            ${gearArr.map(g => `<li class="flex items-start gap-1.5 text-on-surface-variant"><span class="material-symbols-outlined text-[13px] text-emerald-600 shrink-0 mt-0.5">check_circle</span>${g.trim()}</li>`).join('')}
+          </ul>
+        </div>
+
+        <!-- Safety Advisory -->
+        <div class="md:col-span-2 p-3 rounded-xl border flex items-start gap-2" style="background:${ai.gradeColor}10;border-color:${ai.gradeColor}30">
+          <span class="material-symbols-outlined text-[20px] shrink-0 mt-0.5" style="color:${ai.gradeColor}">health_and_safety</span>
+          <div>
+            <span class="font-headline font-bold text-sm text-on-surface block mb-0.5">Peringatan Keselamatan</span>
+            <p class="text-on-surface-variant leading-relaxed">${ai.safetyAdvice}</p>
+          </div>
+        </div>
+
+        <!-- Basecamp tersedia -->
+        ${m.basecamps && m.basecamps.length > 0 ? `
+        <div class="md:col-span-2">
+          <div class="flex items-center gap-1.5 mb-2">
+            <span class="material-symbols-outlined text-[16px]" style="color:${ai.gradeColor}">holiday_village</span>
+            <span class="font-headline font-bold text-sm text-on-surface">Basecamp & Jalur (${m.basecamps.length} jalur)</span>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            ${m.basecamps.map(bc => `
+            <span class="px-3 py-1.5 rounded-xl bg-surface-container text-on-surface font-headline font-semibold text-[11px] flex items-center gap-1 border border-surface-container">
+              <span class="material-symbols-outlined text-[13px] text-primary">signpost</span>
+              Via ${bc.jalurVia} · ${bc.status}
+            </span>`).join('')}
+          </div>
+        </div>` : ''}
+
+      </div>
+
+      <!-- Action Bar -->
+      <div class="p-4 border-t border-surface-container flex flex-wrap gap-2">
+        <button onclick="onAiCardClick(${m.id})" class="px-4 py-2 rounded-xl text-white text-xs font-headline font-bold flex items-center gap-1.5 shadow-sm active:scale-95" style="background:${ai.gradeColor}">
+          <span class="material-symbols-outlined text-[15px]">map</span>
+          Lihat di Peta Interaktif
+        </button>
+        <button onclick="onAiCardClick(${m.id}); setTimeout(()=>openTripPlannerModal(${m.id}),400)" class="px-4 py-2 rounded-xl bg-primary text-white text-xs font-headline font-bold flex items-center gap-1.5 active:scale-95">
+          <span class="material-symbols-outlined text-[15px]">schedule</span>
+          Buka Trip Planner
+        </button>
+        <button onclick="applyAiFilters()" class="px-4 py-2 rounded-xl bg-surface-container text-on-surface text-xs font-headline font-bold hover:bg-surface-container-high">
+          Kembali
+        </button>
+      </div>
+    </div>
+  </div>`;
+}

@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const prisma = require('../config/database');
 
 // Geometri jalur nyata (hasil routing OpenStreetMap) disimpan di kolom Basecamp.jalurGeo (JSON [[lat,lng],...]).
@@ -13,6 +15,51 @@ async function getJalurGeoMap() {
   } catch (err) {
     return new Map();
   }
+}
+
+// Foto / Gambar Gunung disimpan di kolom Gunung.gambar (dibaca/ditulis via raw query agar tetap berjalan tanpa restart DLL Prisma)
+async function getGunungGambarMap() {
+  try {
+    const rows = await prisma.$queryRaw`SELECT id, gambar FROM Gunung WHERE gambar IS NOT NULL`;
+    const map = new Map();
+    for (const r of rows) {
+      if (r.gambar) map.set(Number(r.id), String(r.gambar));
+    }
+    return map;
+  } catch (err) {
+    return new Map();
+  }
+}
+
+async function saveGunungGambar(gunungId, slug, rawGambar) {
+  if (rawGambar === undefined) return null;
+  const trimmed = String(rawGambar || '').trim();
+  if (!trimmed) {
+    await prisma.$executeRawUnsafe('UPDATE Gunung SET gambar = NULL WHERE id = ?', Number(gunungId));
+    return null;
+  }
+
+  let finalUrl = trimmed;
+  // Jika berupa Data URL (hasil upload file gambar dari komputer user), simpan ke folder public/uploads/gunung/
+  const dataMatch = trimmed.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
+  if (dataMatch) {
+    try {
+      let ext = dataMatch[1].toLowerCase().replace('jpeg', 'jpg').replace('svg+xml', 'svg');
+      if (!['jpg', 'png', 'webp', 'gif', 'svg'].includes(ext)) ext = 'jpg';
+      const uploadDir = path.join(__dirname, '..', 'public', 'uploads', 'gunung');
+      fs.mkdirSync(uploadDir, { recursive: true });
+      const safeSlug = (slug || `gunung-${gunungId}`).replace(/[^a-z0-9\-]/gi, '-').toLowerCase();
+      const fileName = `${safeSlug}-${Date.now()}.${ext}`;
+      const filePath = path.join(uploadDir, fileName);
+      fs.writeFileSync(filePath, Buffer.from(dataMatch[2], 'base64'));
+      finalUrl = `/uploads/gunung/${fileName}`;
+    } catch (err) {
+      console.error('Gagal menyimpan file gambar upload, gunakan data URI:', err.message);
+    }
+  }
+
+  await prisma.$executeRawUnsafe('UPDATE Gunung SET gambar = ? WHERE id = ?', finalUrl, Number(gunungId));
+  return finalUrl;
 }
 
 // Helper untuk format instruksi navigasi berbahasa Indonesia
@@ -162,7 +209,7 @@ const getAllGunung = async (req, res) => {
     }
 
     // Format output ringkas dan kaya data
-    const geoMap = await getJalurGeoMap();
+    const [geoMap, gambarMap] = await Promise.all([getJalurGeoMap(), getGunungGambarMap()]);
     const formatted = mountains.map(m => {
       const allPos = m.basecamps.flatMap(b => b.pos);
       const totalAir = allPos.filter(p => p.adaAir).length;
@@ -182,6 +229,7 @@ const getAllGunung = async (req, res) => {
         cuacaKondisi: m.cuacaKondisi,
         latitude: m.latitude,
         longitude: m.longitude,
+        gambar: gambarMap.get(m.id) || null,
         deskripsi: m.deskripsi,
         totalJalur: m.basecamps.length,
         totalPos: allPos.length,
@@ -251,11 +299,13 @@ const getGunungById = async (req, res) => {
 
     const allPos = gunung.basecamps.flatMap(b => b.pos);
     const totalAir = allPos.filter(p => p.adaAir).length;
+    const gambarMap = await getGunungGambarMap();
 
     res.json({
       success: true,
       data: {
         ...gunung,
+        gambar: gambarMap.get(gunung.id) || null,
         totalJalur: gunung.basecamps.length,
         totalPos: allPos.length,
         totalAir
@@ -402,7 +452,7 @@ async function createJalurAndPosForGunung(gunung, jalurData, existingBcCount = 0
 const createGunung = async (req, res) => {
   try {
     const {
-      nama, ketinggian, provinsi, kabupaten, tipeGunung, statusJalur, deskripsi,
+      nama, ketinggian, provinsi, kabupaten, tipeGunung, statusJalur, deskripsi, gambar,
       latitude, longitude, jalurVia, bcNama, bcElevasi, bcLat, bcLng, posNames, jumlahPos
     } = req.body;
     if (!nama || !ketinggian || !provinsi || !kabupaten) {
@@ -431,6 +481,8 @@ const createGunung = async (req, res) => {
       }
     });
 
+    const savedGambar = gambar !== undefined ? await saveGunungGambar(newGunung.id, slug, gambar) : null;
+
     // Jika user sekalian mengisi Jalur Via & Pos saat menambah gunung baru
     if (jalurVia && String(jalurVia).trim() !== '') {
       await createJalurAndPosForGunung(newGunung, {
@@ -446,7 +498,7 @@ const createGunung = async (req, res) => {
     res.status(201).json({
       success: true,
       message: `Gunung ${newGunung.nama} beserta jalur & pos berhasil ditambahkan`,
-      data: fullGunung
+      data: { ...fullGunung, gambar: savedGambar }
     });
   } catch (error) {
     console.error('Error creating gunung:', error);
@@ -465,7 +517,7 @@ const updateGunung = async (req, res) => {
     if (!existing) return res.status(404).json({ success: false, message: 'Gunung tidak ditemukan' });
 
     const {
-      nama, ketinggian, provinsi, kabupaten, tipeGunung, statusJalur, deskripsi,
+      nama, ketinggian, provinsi, kabupaten, tipeGunung, statusJalur, deskripsi, gambar,
       latitude, longitude, jalurVia, bcNama, bcElevasi, bcLat, bcLng, posNames, jumlahPos
     } = req.body;
     const updateData = {};
@@ -499,6 +551,10 @@ const updateGunung = async (req, res) => {
       data: updateData
     });
 
+    if (gambar !== undefined) {
+      await saveGunungGambar(gunungId, existing.slug, gambar);
+    }
+
     // Jika pengguna juga mengisi tambahan Jalur Via & Pos di form Gunung
     if (jalurVia && String(jalurVia).trim() !== '') {
       await createJalurAndPosForGunung(updatedGunung, {
@@ -506,23 +562,45 @@ const updateGunung = async (req, res) => {
       }, existing.basecamps.length);
     }
 
-    const updated = await prisma.gunung.findUnique({
-      where: { id: gunungId },
-      include: {
-        basecamps: {
-          include: { pos: { orderBy: { urutan: 'asc' } } }
+    const [updated, gambarMap] = await Promise.all([
+      prisma.gunung.findUnique({
+        where: { id: gunungId },
+        include: {
+          basecamps: {
+            include: { pos: { orderBy: { urutan: 'asc' } } }
+          }
         }
-      }
-    });
+      }),
+      getGunungGambarMap()
+    ]);
 
     res.json({
       success: true,
       message: `Data ${updated.nama} berhasil diperbarui`,
-      data: updated
+      data: { ...updated, gambar: gambarMap.get(gunungId) || null }
     });
   } catch (error) {
     console.error('Error updating gunung:', error);
     res.status(500).json({ success: false, message: 'Gagal memperbarui data gunung', error: error.message });
+  }
+};
+
+const updateGunungGambarBatch = async (req, res) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    let updatedCount = 0;
+    for (const item of items) {
+      const gid = parseInt(item.id, 10);
+      const url = String(item.gambar || '').trim();
+      if (!isNaN(gid) && url) {
+        await prisma.$executeRawUnsafe('UPDATE Gunung SET gambar = ? WHERE id = ?', url, gid);
+        updatedCount++;
+      }
+    }
+    res.json({ success: true, updatedCount });
+  } catch (error) {
+    console.error('Error batch updating mountain images:', error);
+    res.status(500).json({ success: false, message: 'Gagal memperbarui batch gambar gunung', error: error.message });
   }
 };
 
@@ -1625,12 +1703,846 @@ function slugify(text) {
   return text.toString().toLowerCase().trim().replace(/\s+/g, '-').replace(/[^\w\-]+/g, '');
 }
 
+// ─── AI RECOMMENDATION ENGINE (GRADE 1 - 5: PEMULA HINGGA EXPERT) ────
+const GRADE_DEFINITIONS = {
+  1: {
+    grade: 1,
+    badgeText: 'Grade 1 · Pemula Nol',
+    title: 'First-Timer & Fun Hike',
+    level: 'Pemula Tanpa Pengalaman / Wisata Keluarga',
+    color: '#10b981', // Emerald
+    elevationRange: '< 1.100 mdpl',
+    durationRange: '1 - 3 Jam PP (Tektok)',
+    typicalPace: 'Santai (0.8 - 1.5 km/jam)',
+    suitabilityDescription: 'Sangat cocok untuk yang baru pertama kali mendaki gunung, wisata keluarga dengan anak-anak, atau yang ingin hiking santai tanpa perlu membawa tenda berat.',
+    recommendedGearList: ['Sepatu sneakers/sandal gunung bertraksi', 'Pakaian santai dan menyerap keringat', 'Botol air minum 1-1.5 liter', 'Topi & kacamata hitam', 'Snack ringan & kamera ponsel'],
+    physicalRequirements: 'Kebugaran fisik harian biasa. Tidak memerlukan latihan fisik khusus.'
+  },
+  2: {
+    grade: 2,
+    badgeText: 'Grade 2 · Pemula Siap Camp',
+    title: 'Beginner Mountain Hiker',
+    level: 'Pemula dengan Kebugaran Standar',
+    color: '#06b6d4', // Cyan
+    elevationRange: '1.100 - 2.600 mdpl',
+    durationRange: '2 - 4.5 Jam Naik (Camp 2D1N / Tektok Cepat)',
+    typicalPace: 'Moderat (1.5 - 2 km/jam)',
+    suitabilityDescription: 'Cocok bagi pendaki pemula yang ingin merasakan sensasi bermalam (camping) di puncak gunung dengan jalur yang tertata rapi, jalur aman, dan fasilitas basecamp lengkap.',
+    recommendedGearList: ['Tenda dome double layer', 'Sleeping bag hangat (suhu 10-15°C)', 'Matras tidur & jaket windproof/fleece', 'Headlamp / senter LED', 'Kompor portable & nesting', 'Air minum 2.5 - 3 liter'],
+    physicalRequirements: 'Jogging santai 2-3 km seminggu 1-2 kali sebelum mendaki. Siap menapaki tangga alam.'
+  },
+  3: {
+    grade: 3,
+    badgeText: 'Grade 3 · Menengah',
+    title: 'Intermediate Summit Seeker',
+    level: 'Pendaki Menengah (Pernah Mendaki 2-3x)',
+    color: '#3b82f6', // Blue
+    elevationRange: '2.500 - 3.250 mdpl',
+    durationRange: '5 - 8 Jam Naik (Camp 2D1N)',
+    typicalPace: 'Stabil (1.8 - 2.5 km/jam)',
+    suitabilityDescription: 'Untuk pendaki yang sudah memiliki pengalaman mendaki 2-3 kali, siap menghadapi tanjakan panjang, jalur akar dan tanah terjal, sabana luas berangin kencang, serta udara malam dingin.',
+    recommendedGearList: ['Carrier 45-60L', 'Tenda kokoh tahan terpaan angin', 'Sleeping bag tebal (suhu 5-10°C)', 'Sepatu gunung bersol tebal (vibram/grippy)', 'Trekking pole sepasang', 'Jaket waterproof & windbreaker', 'Emergency survival kit'],
+    physicalRequirements: 'Latihan kardio rutin 5 km, latihan squat/lunges untuk memperkuat otot paha & lutut.'
+  },
+  4: {
+    grade: 4,
+    badgeText: 'Grade 4 · Mahir',
+    title: 'Advanced Peak Challenger',
+    level: 'Pendaki Mahir & Berpengalaman',
+    color: '#f97316', // Orange
+    elevationRange: '> 3.000 mdpl atau Medan Sangat Terjal / Teknis',
+    durationRange: '7 - 12 Jam Naik (Camp 2D1N atau 3D2N)',
+    typicalPace: 'Tangguh (2.0 - 3.0 km/jam)',
+    suitabilityDescription: 'Dikhususkan untuk pendaki yang telah berpengalaman mendaki gunung tinggi, siap menaklukkan elevasi gain ekstrem (>1.800m), medan berbatu cadas atau hutan lebat teknis, dan cuaca ekstrem.',
+    recommendedGearList: ['Carrier 60-70L', 'Tenda badai 4 season', 'Sleeping bag bulu angsa (suhu 0-5°C)', 'Gaiter penahan pasir/lumpur', 'Headlamp waterproof dengan baterai cadangan', 'Flysheet tebal & kompas/GPS offline', 'P3K lengkap & water filtration'],
+    physicalRequirements: 'Kapasitas aerobik dan daya tahan otot tinggi. Mampu membawa beban ransel 15-20 kg menanjak tajam berjam-jam.'
+  },
+  5: {
+    grade: 5,
+    badgeText: 'Grade 5 · Expert / Ekstrem',
+    title: 'Extreme Technical & Endurance Expedition',
+    level: 'Pendaki Ahli / Mountaineer Berpengalaman Tinggi',
+    color: '#ef4444', // Red
+    elevationRange: '> 3.300 mdpl / Jalur Ekstrem & Berjurang / Ekspedisi Lintas Hari',
+    durationRange: '3 - 5 Hari Ekspedisi atau Medan Pemanjatan Berbahaya',
+    typicalPace: 'Taktis & Hati-hati (1.2 - 2.0 km/jam pada medan teknis)',
+    suitabilityDescription: 'Tingkat tertinggi pendakian gunung. Membutuhkan keterampilan teknis pemanjatan tebing/scrambling, tali-temali, toleransi jurang vertikal tinggi, atau manajemen logistik mandiri ekspedisi 4-5 hari.',
+    recommendedGearList: ['Climbing harness & tali webbing/carmantel', 'Helm panjat (rockfall climbing helmet)', 'Carabiner screw gate', 'Carrier ekspedisi 70-80L', 'Water filter & ransum makanan 4-5 hari', 'Emergency bivvy / satellite tracker', 'Perlengkapan alpine sub-zero'],
+    physicalRequirements: 'Fisik prima kelas atletik/mountaineering, mental baja tanpa vertigo/akrofobia, paham navigasi darat & teknik evakuasi darurat.'
+  }
+};
+
+const CURATED_MOUNTAIN_DATA = {
+  // GRADE 5 - EXPERT
+  'gunung-raung': {
+    grade: 5,
+    category: 'Technical Mountaineering & Knife-Edge Ridge',
+    matchScore: 99,
+    trailCharacteristics: 'Punggungan sempit (Shiratal Mustaqim) dengan jurang ratusan meter di sisi kanan-kiri, tebing batuan cadas terjal, wajib webbing/tali carmantel & helm panjat di Puncak Sejati.',
+    recommendedDuration: 'Camp 3 Hari 2 Malam (Via Kalibaru)',
+    estimatedAscentHours: '10 - 13 Jam',
+    physicalPreparation: 'Kebugaran fisik prima, latihan ketinggian, tidak boleh memiliki riwayat vertigo atau fobia jurang.',
+    essentialGear: 'Climbing harness, helm panjat, carabiner, webbing tali, windbreaker tebal, tenda kokoh.',
+    safetyAdvice: 'Dilarang melintasi jembatan Shiratal Mustaqim saat angin kencang berhembus atau hujan lebat. Selalu gunakan pemandu lokal bersertifikasi.',
+    summary: 'Rekomendasi puncak untuk pendaki expert yang mencari tantangan teknis tebing ekstrem dan panorama kaldera raksasa terdalam di Pulau Jawa.'
+  },
+  'gunung-argopuro': {
+    grade: 5,
+    category: 'Endurance Wilderness Expedition (~50 km)',
+    matchScore: 98,
+    trailCharacteristics: 'Jalur pendakian terpanjang di Pulau Jawa (~45-50 km), melintasi Dataran Tinggi Hyang, padang sabana Cikasur yang luas, hutan lebat, dan jarak antar pos sumber air sangat jauh.',
+    recommendedDuration: 'Ekspedisi 4 - 5 Hari (Lintas Baderan - Bremi)',
+    estimatedAscentHours: '25 - 32 Jam Total Trekking',
+    physicalPreparation: 'Endurance jangka panjang, terbiasa memikul beban ransel 15-20 kg berhari-hari.',
+    essentialGear: 'Carrier 65-80L, water purifier, logistik makan 5 hari, tenda tahan badai, emergency medical kit lengkap, gaiter.',
+    safetyAdvice: 'Waspada disorientasi arah di padang sabana luas saat kabut tebal turun. Siapkan manajemen pasokan air secara matang.',
+    summary: 'Puncak uji ketahanan fisik dan mental jangka panjang. Surga bagi pendaki expert penikmat ekspedisi alam liar multi-hari.'
+  },
+  'gunung-semeru': {
+    grade: 5,
+    category: 'High Altitude & Extreme Scree Summit',
+    matchScore: 97,
+    trailCharacteristics: 'Atap Pulau Jawa (3.676 mdpl). Medan pasir vulkanik curam Mahameru (2 langkah naik melorot 1 langkah), batu lepas berguguran, dan paparan gas beracun kawah aktif Jonggring Saloko.',
+    recommendedDuration: 'Camp 3 Hari 2 Malam (Via Ranupani)',
+    estimatedAscentHours: '10 - 14 Jam',
+    physicalPreparation: 'Kapasitas aerobik tinggi, aklimatisasi ketinggian >3.500 mdpl, kekuatan betis prima.',
+    essentialGear: 'Gaiter penahan pasir, masker respirator debu, helm pendaki, jaket thermal sub-zero (suhu bisa 0°C), kacamata anti-debu.',
+    safetyAdvice: 'Batas aman summit Mahameru maksimal jam 09.00 pagi karena angin membawa gas beracun ke arah puncak. Waspadai longsoran batu.',
+    summary: 'Gunung tertinggi dan paling ikonik di Pulau Jawa dengan kecantikan Ranu Kumbolo, namun tanjakan pasir Mahameru menguras stamina tingkat tinggi.'
+  },
+  'gunung-merapi': {
+    grade: 5,
+    category: 'Active Volcanic Hazard & Unstable Scree',
+    matchScore: 94,
+    trailCharacteristics: 'Kemiringan batuan pasir lepas sangat labil di atas Pasar Bubrah, status vulkanik aktif tingkat tinggi.',
+    recommendedDuration: 'Tektok Cepat / Camp Selo (Sesuai Izin Balai TNGM)',
+    estimatedAscentHours: '4 - 6 Jam',
+    physicalPreparation: 'Refleks cepat dan keseimbangan tinggi di atas bebatuan lepas.',
+    essentialGear: 'Helm pendaki (rockfall helmet), masker debu respirator, kacamata goggle, trekking pole.',
+    safetyAdvice: 'Hanya lakukan pendakian bila rekomendasi PVMBG/Balai TNGM mengizinkan secara resmi. Hindari mendekati kubah lava aktif.',
+    summary: 'Gunung api teraktif di Indonesia dengan medan batuan lepas dan risiko vulkanik yang hanya untuk pendaki berpengalaman.'
+  },
+
+  // GRADE 4 - ADVANCED
+  'gunung-slamet': {
+    grade: 4,
+    category: 'Roof of Central Java & Cold Ridge',
+    matchScore: 96,
+    trailCharacteristics: 'Atap Jawa Tengah (3.432 mdpl). Tanjakan panjang konstan di tengah hutan basah berlanjut ke medan batuan pasir merah curam mendekati puncak, suhu sangat dingin membekukan.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam (Via Bambangan, Guci, atau Dipajaya)',
+    estimatedAscentHours: '8 - 11 Jam',
+    physicalPreparation: 'Kardio intensif, latihan kekuatan otot kaki, simulasi tanjakan terjal berulang.',
+    essentialGear: 'Tenda tahan angin kencang, sleeping bag thermal (0-5°C), jaket windproof/waterproof tebal, water reservoir 3-4 liter.',
+    safetyAdvice: 'Tidak ada sumber air di pos atas (Pos 7-9). Waspada badai kabut tebal dan angin kencang di area puncak yang terbuka lebar.',
+    summary: 'Tantangan puncak tertinggi Jawa Tengah dengan elevasi gain masif dan medan batuan puncak yang menantang adrenalin.'
+  },
+  'gunung-sumbing': {
+    grade: 4,
+    category: 'Ruthless Incline & Active Crater',
+    matchScore: 95,
+    trailCharacteristics: 'Tanjakan terjal konstan tanpa banyak bonus (Engkol-engkolan, Tanah Putih), kawah aktif dengan tebing belerang, paparan angin kencang.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam (Via Garung, Bowongso, atau Kaliangkrik)',
+    estimatedAscentHours: '7 - 9.5 Jam',
+    physicalPreparation: 'Kekuatan paha dan lutut untuk tanjakan curam dan turunan panjang berdebu.',
+    essentialGear: 'Sepasang trekking pole, sleeping bag hangat, buff debu, jaket tahan angin tebal.',
+    safetyAdvice: 'Tanjakan menjelang puncak sangat menguras tenaga, istirahat teratur dengan ritme nafas stabil.',
+    summary: 'Gunung berkarakter gagah dengan panorama megah kawah belerang dan pemandangan kembaran Gunung Sindoro dari dekat.'
+  },
+  'gunung-ciremai': {
+    grade: 4,
+    category: 'Highest Elevation Gain & Steep Forest',
+    matchScore: 95,
+    trailCharacteristics: 'Atap Jawa Barat (3.078 mdpl). Tanjakan terjal tanpa henti sejak ketinggian rendah (elevasi gain >2.200m via Linggajati), minim bonus turunan.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam (Via Apuy, Palutungan, atau Linggajati)',
+    estimatedAscentHours: '8 - 11 Jam',
+    physicalPreparation: 'Ketahanan kaki menghadapi "tanjakan bapa tere" dan ribuan undakan akar pohon.',
+    essentialGear: 'Headlamp cadangan, jaket windproof, air minimal 3-4 liter (jalur atas kering), tenda kuat.',
+    safetyAdvice: 'Pilih via Apuy jika ingin jalur yang lebih moderat, atau via Linggajati untuk uji fisik advanced sejati.',
+    summary: 'Ujian ketahanan terberat di Jawa Barat dengan kawah ganda raksasa di puncak yang spektakuler.'
+  },
+  'gunung-arjuno': {
+    grade: 4,
+    category: 'Long Distance & Rocky Summit Scramble',
+    matchScore: 94,
+    trailCharacteristics: 'Jalur panjang melalui hutan pinus, lereng terjal Ogal Agil, bebatuan besar di puncak, serta cuaca berkabut dingin.',
+    recommendedDuration: 'Camp 3 Hari 2 Malam (Via Tretes atau Sumber Brantas)',
+    estimatedAscentHours: '9 - 12 Jam',
+    physicalPreparation: 'Stamina jalan jauh dengan ransel berat, latihan langkah di batuan makadam.',
+    essentialGear: 'Sepatu trekking bersol tebal anti selip, flysheet tambahan, logistik lengkap, jaket tebal.',
+    safetyAdvice: 'Waspada petir di kawasan savana terbuka dan lereng berbatu saat mendung pekat.',
+    summary: 'Kombinasi pendakian spiritual, sejarah situs arca, dan puncak bebatuan megah Ogal Agil.'
+  },
+  'gunung-welirang': {
+    grade: 4,
+    category: 'Sulfur Crater & Rocky Makadam Path',
+    matchScore: 92,
+    trailCharacteristics: 'Jalur makadam berbatu, kawah belerang aktif dengan asap pekat, sering digabung lintas Arjuno-Welirang.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam atau 3D2N (Via Tretes)',
+    estimatedAscentHours: '8 - 10 Jam',
+    physicalPreparation: 'Daya tahan otot lutut pada jalan berbatu keras makadam penambang belerang.',
+    essentialGear: 'Masker respirator penyaring sulfur/belerang, kacamata pelindung, sleeping bag hangat.',
+    safetyAdvice: 'Hindari menghirup asap belerang pekat secara langsung saat angin berhembus ke arah jalur.',
+    summary: 'Pengalaman menakjubkan melihat aktivitas penambang belerang tradisional dan kawah asap belerang eksotis.'
+  },
+  'gunung-salak': {
+    grade: 4,
+    category: 'Dense Technical Rainforest & Navigational Puzzle',
+    matchScore: 95,
+    trailCharacteristics: 'Meskipun ketinggian 2.211 mdpl, medannya sangat teknis: hutan lumut lebat, akar basah terjal, lumpur dalam, jurang tersembunyi kabut tebal, rawan disorientasi.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam atau Tektok Panjang (Via Cidahu atau Pasir Reungit)',
+    estimatedAscentHours: '7 - 10 Jam',
+    physicalPreparation: 'Ketangkasan melompati akar, merayap di lorong ranting, dan stamina di trek berlumpur licin.',
+    essentialGear: 'Jas hujan ponco/waterproof kuat, cover bag tebal, kompas/GPS offline, baju ganti kedap air, drybag.',
+    safetyAdvice: 'Jangan pernah keluar dari jalur pita penanda. Hutan Salak memiliki anomali kabut cepat yang menutup pandangan.',
+    summary: 'Gunung berkarakter rimba hutan hujan paling menantang dan mistis di Jawa Barat dengan elevasi teknis tinggi.'
+  },
+
+  // GRADE 3 - INTERMEDIATE
+  'gunung-gede': {
+    grade: 3,
+    category: 'Classic Intermediate & Best National Park Facilities',
+    matchScore: 97,
+    trailCharacteristics: 'Jalur sangat tertata dan terkelola rapi oleh Taman Nasional (Via Cibodas & Gunung Putri), sumber air melimpah di pos tertentu, Alun-Alun Surya Kencana yang luas.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam',
+    estimatedAscentHours: '5 - 7 Jam',
+    physicalPreparation: 'Lari rutin 3-5 km seminggu 2 kali, latihan squat untuk menghadapi tanjakan Putri.',
+    essentialGear: 'Tenda dome 2 lapis, sleeping bag, matras foil/inflatable, jaket fleece/windproof, nesting masak.',
+    safetyAdvice: 'Waspada suhu malam di Surya Kencana bisa mencapai 5-8°C. Bawa pakaian hangat dan jangan mendirikan tenda tepat di aliran air.',
+    summary: 'Pilihan pendakian menengah paling favorit di Indonesia dengan pesona edelweiss Surya Kencana dan kawah aktif.'
+  },
+  'gunung-pangrango': {
+    grade: 3,
+    category: 'Wilderness Intermediate & Mossy Forest Path',
+    matchScore: 95,
+    trailCharacteristics: 'Trek lebih menanjak dibanding Gede dari percabangan Kandang Badak, hutan lumut basah alami, dan keheningan Lembah Mandalawangi.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam',
+    estimatedAscentHours: '6 - 8 Jam',
+    physicalPreparation: 'Ketahanan kaki di tanjakan berlumpur dan akar basah.',
+    essentialGear: 'Sepatu trekking tahan air, gaiter, pakaian ganti kering, jaket tebal, perlengkapan bivak/tenda.',
+    safetyAdvice: 'Jalur menjelang puncak Mandalawangi relatif licin dan basah. Gunakan trekking pole.',
+    summary: 'Destinasi puitis penuh kenangan Soe Hok Gie dengan keindahan abadi padang edelweiss Lembah Mandalawangi.'
+  },
+  'gunung-merbabu': {
+    grade: 3,
+    category: 'Scenic Rolling Savanna & 360 Panorama',
+    matchScore: 97,
+    trailCharacteristics: 'Pemandangan 360 derajat terbaik di Jawa Tengah, padang sabana hijau bergelombang luas, angin kencang di punggungan bukit terbuka.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam (Via Selo, Suwanting, atau Wekas)',
+    estimatedAscentHours: '5 - 8 Jam',
+    physicalPreparation: 'Kardio baik untuk jalan menanjak panjang tanpa banyak naungan pohon di sabana.',
+    essentialGear: 'Tenda tahan angin kencang beserta pasak kuat, jaket windproof tebal, sunblock/topi rimba, persediaan air memadai.',
+    safetyAdvice: 'Di jalur Selo tidak ada sumber air di pos atas (harus bawa dari basecamp). Angin di Pos 3/Sabana 1 sangat kencang.',
+    summary: 'Gunung dengan panorama sabana terindah di Jawa Tengah, surga bagi pecinta fotografi lanskap alam.'
+  },
+  'gunung-lawu': {
+    grade: 3,
+    category: 'Historic Ridge Trail & Famous Warung Mbok Yem',
+    matchScore: 96,
+    trailCharacteristics: 'Jalur berbatu tertata rapi (Cemoro Sewu) atau padang sabana luas (Candi Cetho), terdapat warung tertinggi Mbok Yem di Pos 5.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam',
+    estimatedAscentHours: '6 - 8 Jam',
+    physicalPreparation: 'Kekuatan sendi lutut untuk menaiki ribuan undakan batu di Cemoro Sewu.',
+    essentialGear: 'Jaket tebal (angin dingin di puncak bisa sangat menusuk), sleeping bag, headlamp baterai baru.',
+    safetyAdvice: 'Suhu malam hari di Lawu terkenal sangat dingin. Kenakan pakaian berlapis (layering system).',
+    summary: 'Pendakian penuh nilai spiritual dan kenyamanan warung legendaris Mbok Yem di dekat puncak Hargo Dumilah.'
+  },
+  'gunung-sindoro': {
+    grade: 3,
+    category: 'Volcanic Rock Slope & Sunrise Camp',
+    matchScore: 94,
+    trailCharacteristics: 'Trek kebun teh di awal, hutan lamtoro, kemudian tanjakan bebatuan terjal khas gunung kerucut vulkanik terbuka hingga bibir kawah.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam (Via Kledung, Ndoro Arum, atau Bansari)',
+    estimatedAscentHours: '6 - 8 Jam',
+    physicalPreparation: 'Kekuatan betis dan ketahanan langkah di atas batuan lepas.',
+    essentialGear: 'Trekking pole, sepatu gunung kokoh, jaket tahan dingin dan angin, kacamata hitam.',
+    safetyAdvice: 'Jalur bebatuan dari Sunrise Camp ke puncak cukup licin saat berembun. Mulai summit dini hari pukul 02.30.',
+    summary: 'Pesona kawah aktif dengan danau belerang kering dan panorama Gunung Sumbing tepat di hadapan mata.'
+  },
+  'gunung-cikuray': {
+    grade: 3,
+    category: 'Continuous Steep Incline ("Tanjakan Tanpa Bonus")',
+    matchScore: 93,
+    trailCharacteristics: 'Kemiringan rata-rata 40-50 derajat tanpa bonus jalur landai, jalur tanah padat di dalam hutan rindang, puncak lautan awan.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam (Via Pemancar, Bayongbong, atau Tapak Geurot)',
+    estimatedAscentHours: '5 - 7 Jam',
+    physicalPreparation: 'Latihan betis dan paha ekstra untuk tanjakan konstan.',
+    essentialGear: 'Trekking pole sangat dianjurkan, air minum minimal 3 liter (tidak ada sumber air di pos atas), matras empuk.',
+    safetyAdvice: 'Hati-hati terhadap satwa babi hutan yang sering mencari makanan di sekitar tenda (gantung bahan makanan di pohon).',
+    summary: 'Ujian ketahanan betis sejati di Jawa Barat dengan hadiah pemandangan samudera di atas awan yang luar biasa.'
+  },
+  'gunung-kawi': {
+    grade: 3,
+    category: 'Dense Bamboo Forest & Cultural Trail',
+    matchScore: 90,
+    trailCharacteristics: 'Hutan bambu lebat dan lumut, tanjakan berkelanjutan, suasana tenang dan asri.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam',
+    estimatedAscentHours: '5 - 7 Jam',
+    physicalPreparation: 'Kebugaran fisik menengah, latihan jalan menanjak.',
+    essentialGear: 'Tenda tahan hujan, repellent anti nyamuk/pacet, sleeping bag.',
+    safetyAdvice: 'Jalur hutan bambu cukup rimbun, perhatikan penanda jalur agar tidak menyimpang.',
+    summary: 'Pendakian yang sarat nuansa mistis dan spiritual di Jawa Timur dengan hutan yang masih sangat lebat.'
+  },
+  'gunung-dorowati': {
+    grade: 3,
+    category: 'Ridge Mountain Hike',
+    matchScore: 89,
+    trailCharacteristics: 'Jalur punggungan perbukitan terjal dengan vegetasi pinus dan semak belukar.',
+    recommendedDuration: 'Camp 1-2 Malam atau Tektok Panjang',
+    estimatedAscentHours: '4 - 6 Jam',
+    physicalPreparation: 'Stamina jalan mendaki berulang.',
+    essentialGear: 'Sepatu trekking, jaket windproof, air minum.',
+    safetyAdvice: 'Jalur punggungan berangin kencang, waspada pijakan tanah gembur.',
+    summary: 'Gunung dengan pemandangan pegunungan Anjasmoro yang menawan dan jalur yang masih alami.'
+  },
+  'gunung-kendang': {
+    grade: 3,
+    category: 'Wilderness Ridge Hike',
+    matchScore: 90,
+    trailCharacteristics: 'Jalur perkebunan teh kemudian masuk ke hutan alami yang terjal dan jarang terjamah.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam',
+    estimatedAscentHours: '5 - 7 Jam',
+    physicalPreparation: 'Ketahanan fisik menghadapi jalan berlumpur dan semak berduri.',
+    essentialGear: 'Gaiter, celana panjang trekking tahan goresan, jaket tebal.',
+    safetyAdvice: 'Pastikan membawa kompas/GPS karena jalur masih minim plang penunjuk arah resmi.',
+    summary: 'Titik tertinggi di kawasan perbukitan Bandung Selatan dengan panorama kebun teh yang hijau royo-royo.'
+  },
+  'gunung-patuha': {
+    grade: 2,
+    category: 'Volcanic Lake & Tea Plantation',
+    matchScore: 94,
+    trailCharacteristics: 'Trek kebun teh dan hutan lindung menuju puncak kawah putih, jalur relatif jelas.',
+    recommendedDuration: 'Camp 1 Malam atau Tektok Santai',
+    estimatedAscentHours: '2.5 - 4 Jam',
+    physicalPreparation: 'Kebugaran harian normal.',
+    essentialGear: 'Masker penahan belerang, pakaian hangat.',
+    safetyAdvice: 'Bawa masker saat berada di sekitar bibir kawah putih bila bau belerang tercium tajam.',
+    summary: 'Eksotisme kawah vulkanik putih kehijauan di Ciwidey yang terkenal di kalangan pelancong dan pendaki pemula.'
+  },
+  'gunung-malabar': {
+    grade: 3,
+    category: 'Dense Historical Rainforest',
+    matchScore: 91,
+    trailCharacteristics: 'Hutan basah rapat, akar pohon besar, jalur menanjak tajam di kawasan Puntang/Malabar.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam',
+    estimatedAscentHours: '5 - 7 Jam',
+    physicalPreparation: 'Kekuatan fisik menaiki undakan tanah basah dan licin.',
+    essentialGear: 'Jas hujan, tenda double layer, sepatu bersol tebal anti licin.',
+    safetyAdvice: 'Waspada pacet dan tanaman jelatang di sepanjang vegetasi basah.',
+    summary: 'Gunung bersejarah stasiun radio Malabar masa kolonial dengan hutan tropis yang lebat dan asri.'
+  },
+  'gunung-guntur': {
+    grade: 3,
+    category: 'Open Gravel Volcanic Slope ("Mini Semeru")',
+    matchScore: 93,
+    trailCharacteristics: 'Tanjakan kerikil dan pasir vulkanik terbuka tanpa peneduh pohon, paparan terik matahari siang dan angin kencang.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam (Via Citiis)',
+    estimatedAscentHours: '4 - 6 Jam',
+    physicalPreparation: 'Ketahanan fisik menghadapi medan pasir dan bebatuan kerikil yang licin merosot.',
+    essentialGear: 'Topi rimba, kacamata hitam, sunblock, gaiter penahan kerikil, air minimal 3 liter.',
+    safetyAdvice: 'Disarankan mendaki saat sore hari atau dini hari untuk menghindari sengatan terik matahari langsung.',
+    summary: 'Dikenal sebagai "Mini Semeru"-nya Garut dengan pemandangan kota Garut yang berpendar indah di malam hari.'
+  },
+  'gunung-burangrang': {
+    grade: 3,
+    category: 'Steep Military Training Ridge',
+    matchScore: 92,
+    trailCharacteristics: 'Jalur curam berbatu dan berakar tanah (Via Komando / Legok Haji), kemiringan tinggi menguji ketahanan betis.',
+    recommendedDuration: 'Tektok Cepat (5-6 Jam PP) atau Camp 1 Malam',
+    estimatedAscentHours: '2.5 - 4 Jam Naik',
+    physicalPreparation: 'Latihan fisik kaki untuk menapaki jalur terjal tanpa bonus.',
+    essentialGear: 'Trekking pole, sarung tangan kain untuk pegangan akar, sepatu trail.',
+    safetyAdvice: 'Hati-hati saat menuruni jalur Legok Haji saat hujan karena tanah merah sangat licin.',
+    summary: 'Gunung favorit di Bandung Barat untuk tektok cepat melatih ketahanan fisik sebelum mendaki gunung besar.'
+  },
+
+  // GRADE 2 - BEGINNER (PEMULA SIAP CAMP)
+  'gunung-prau': {
+    grade: 2,
+    category: 'Best Beginner Mountain (Jawara Pemula Se-Indonesia)',
+    matchScore: 99,
+    trailCharacteristics: 'Jalur tangga tanah dan batu terkelola sangat baik (Via Patakbanteng, Dieng, atau Kalilembu), waktu tempuh singkat, camping ground luas.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam (Bisa juga Tektok Cepat)',
+    estimatedAscentHours: '3 - 4 Jam',
+    physicalPreparation: 'Kebugaran fisik standar, jogging santai 1-2 minggu sebelum pendakian.',
+    essentialGear: 'Tenda dome standar, sleeping bag hangat (suhu Dieng bisa mencapai minus/embun upas), jaket tebal, sarung tangan.',
+    safetyAdvice: 'Suhu di puncak Prau bisa turun drastis di musim kemarau (Juli-September). Siapkan pakaian hangat rangkap.',
+    summary: 'Rekomendasi nomor 1 di Indonesia untuk pemula yang ingin merasakan sensasi bermalam di puncak gunung dengan golden sunrise terbaik di Asia Tenggara.'
+  },
+  'gunung-papandayan': {
+    grade: 2,
+    category: 'Scenic Valley & Gentle Beginner Trail',
+    matchScore: 98,
+    trailCharacteristics: 'Jalur lebar dan landai, melewati lanskap kawah belerang eksotis, jembatan kayu, Hutan Mati yang ikonik, dan camping ground Pondok Saladah yang nyaman dengan sumber air dan toilet.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam',
+    estimatedAscentHours: '2.5 - 4 Jam',
+    physicalPreparation: 'Kondisi tubuh fit, cocok untuk pendaki pemula, wanita, hingga remaja.',
+    essentialGear: 'Tenda camping, pakaian hangat, botol minum, jas hujan, kamera foto.',
+    safetyAdvice: 'Hati-hati saat melintasi area kawah aktif, jangan mendekati lubang uap panas belerang.',
+    summary: 'Gunung ramah pemula paling lengkap di Jawa Barat dengan kawah, hutan mati, padang edelweiss Tegal Alun, dan fasilitas basecamp modern.'
+  },
+  'gunung-andong': {
+    grade: 2,
+    category: 'Ideal First Camp & Fun Trek',
+    matchScore: 98,
+    trailCharacteristics: 'Jalur bertangga rapi dan jelas (Via Sawit atau Pendem), rute pendek, terdapat warung makan di puncak yang buka 24 jam di akhir pekan.',
+    recommendedDuration: 'Camp 1 Malam atau Tektok Santai',
+    estimatedAscentHours: '1.5 - 2.5 Jam',
+    physicalPreparation: 'Cukup peregangan otot dan jalan santai.',
+    essentialGear: 'Sepatu/sandal gunung, jaket penahan angin, headlamp, tenda ringan.',
+    safetyAdvice: 'Punggung jembatan setan menuju puncak Alap-alap agak sempit, berhati-hatilah saat angin kencang.',
+    summary: 'Pilihan paling sempurna untuk pendakian perdana tanpa takut kelaparan atau tersesat, dengan pemandangan Merbabu-Merapi yang megah.'
+  },
+  'gunung-pundak': {
+    grade: 2,
+    category: 'Grassland Hill & Gentle Weekend Hike',
+    matchScore: 96,
+    trailCharacteristics: 'Jalur tanah landai dengan vegetasi bambu dan hutan pinus, puncak berupa padang rumput datar yang sangat luas untuk camping.',
+    recommendedDuration: 'Camp 1 Malam atau Tektok Santai',
+    estimatedAscentHours: '1.5 - 2.5 Jam',
+    physicalPreparation: 'Kebugaran harian standar.',
+    essentialGear: 'Tenda dome, matras, jaket, flysheet penahan embun.',
+    safetyAdvice: 'Bawa persediaan air yang cukup dari pos bawah karena di puncak tidak ada sumber air.',
+    summary: 'Destinasi favorit para pemula dan keluarga di Jawa Timur untuk menghabiskan malam bertabur bintang di ketinggian 1.585 mdpl.'
+  },
+  'gunung-kencana': {
+    grade: 2,
+    category: 'Short Steep Step Challenge',
+    matchScore: 94,
+    trailCharacteristics: 'Tanjakan Sambalado (anak tangga kayu curam) di awal sekitar 30-45 menit, setelah itu jalur tanah di tengah perkebunan teh dan hutan.',
+    recommendedDuration: 'Tektok Santai (Half-day) atau Camp 1 Malam',
+    estimatedAscentHours: '1 - 1.5 Jam',
+    physicalPreparation: 'Latihan naik tangga untuk pemanasan.',
+    essentialGear: 'Sepatu dengan grip baik, air minum 1.5L, kamera.',
+    safetyAdvice: 'Pegang kayu pengaman saat menaiki tanjakan sambalado, jangan terburu-buru.',
+    summary: 'Spot favorit warga Jabodetabek untuk pendakian singkat akhir pekan dengan panorama Gunung Gede-Pangrango yang gagah.'
+  },
+  'gunung-ungaran': {
+    grade: 2,
+    category: 'Pine Forest & Scenic Summit Ridge',
+    matchScore: 95,
+    trailCharacteristics: 'Jalur via Mawar tertata apik melewati kebun teh dan hutan pinus, terdapat pondok camp dan sumber air.',
+    recommendedDuration: 'Camp 2 Hari 1 Malam atau Tektok Pagi',
+    estimatedAscentHours: '3 - 4 Jam',
+    physicalPreparation: 'Kebugaran fisik umum dan stamina jalan menanjak.',
+    essentialGear: 'Tenda, jaket windproof, senter, makanan siap santap.',
+    safetyAdvice: 'Menjelang puncak terdapat jalur bebatuan yang membutuhkan kehati-hatian saat basah.',
+    summary: 'Gunung ramah pemula di sekitar Semarang dengan camping ground Mawar yang nyaman dan panorama Rawa Pening.'
+  },
+  'gunung-penanggunan': {
+    grade: 2,
+    category: 'Historical Sacred Mountain & Steep Short Climb',
+    matchScore: 94,
+    trailCharacteristics: 'Miniatur Gunung Semeru dengan banyak situs candi bersejarah peninggalan Majapahit di sepanjang jalur Tamiajeng atau Jolotundo.',
+    recommendedDuration: 'Camp 1 Malam atau Tektok Cepat',
+    estimatedAscentHours: '3 - 4 Jam',
+    physicalPreparation: 'Latihan fisik sedang untuk tanjakan batuan puncak.',
+    essentialGear: 'Sepatu bertraksi kuat, jaket penahan angin, air minum 2L.',
+    safetyAdvice: 'Tanjakan batuan dari Puncak Bayangan ke puncak utama cukup terjal dan berdebu, melangkahlah hati-hati.',
+    summary: 'Kombinasi menakjubkan antara wisata sejarah candi purba dan pendakian puncak kerucut sempurna di Jawa Timur.'
+  },
+  'gunung-sikunir': {
+    grade: 2,
+    category: 'Golden Sunrise Hill Walk',
+    matchScore: 97,
+    trailCharacteristics: 'Anak tangga semen dan kayu dengan pagar pengaman, warung di basecamp dan pos awal, rute sangat singkat.',
+    recommendedDuration: 'Tektok Subuh (45-60 Menit)',
+    estimatedAscentHours: '30 - 45 Menit',
+    physicalPreparation: 'Jalan santai biasa.',
+    essentialGear: 'Jaket tebal (suhu pagi Dieng sangat dingin), sarung tangan, senter kecil.',
+    safetyAdvice: 'Mulai mendaki sekitar jam 04.30 pagi untuk mendapatkan momen golden sunrise terbaik.',
+    summary: 'Bukit matahari terbit paling terkenal di Dieng Plateau yang sangat aman dan mudah dijangkau semua kalangan.'
+  },
+  'gunung-manglayang': {
+    grade: 2,
+    category: 'Forest Steep Trek for Beginner Workout',
+    matchScore: 92,
+    trailCharacteristics: 'Jalur tanah hutan pinus yang langsung menanjak, waktu tempuh moderat via Batu Kuda.',
+    recommendedDuration: 'Tektok Santai atau Camp 1 Malam',
+    estimatedAscentHours: '2 - 3 Jam',
+    physicalPreparation: 'Latihan kaki menaiki jalur tanjakan rapat.',
+    essentialGear: 'Sepatu trail, air minum 2 liter, jas hujan.',
+    safetyAdvice: 'Jalur bisa licin saat musim hujan, hindari turun saat tanah basah tanpa bantuan tongkat trekking.',
+    summary: 'Tempat latihan fisik favorit para pendaki di Bandung Timur dengan camping ground Batu Kuda yang rindang.'
+  },
+
+  // GRADE 1 - FIRST-TIMER / FUN HIKE (PEMULA NOL PENGALAMAN & KELUARGA)
+  'gunung-munara': {
+    grade: 1,
+    category: 'First-Timer Rock Hill & Quick Trek',
+    matchScore: 98,
+    trailCharacteristics: 'Bukit batu dengan jalur tanah dan akar, banyak warung di sepanjang jalur, terdapat situs gua bersejarah.',
+    recommendedDuration: 'Tektok Santai 1.5 - 2.5 Jam PP',
+    estimatedAscentHours: '45 - 60 Menit',
+    physicalPreparation: 'Tidak butuh latihan khusus, cukup kondisi badan sehat.',
+    essentialGear: 'Sepatu kets/sandal gunung bertraksi, kaos santai, botol air mineral.',
+    safetyAdvice: 'Berhati-hati saat memanjat batuan puncak yang curam, gunakan pegangan tali yang tersedia.',
+    summary: 'Destinasi sempurna untuk siapa saja yang belum pernah naik gunung sama sekali, berlokasi di Rumpin, Bogor.'
+  },
+  'gunung-api-purba-nglanggeran': {
+    grade: 1,
+    category: 'Geological Heritage & Wooden Stairs',
+    matchScore: 99,
+    trailCharacteristics: 'Fasilitas sangat rapi, anak tangga kayu dan semen, lorong batu sempit eksotis dengan tali pengaman, papan penunjuk jalan sangat jelas.',
+    recommendedDuration: 'Tektok Santai 1.5 - 2 Jam PP',
+    estimatedAscentHours: '45 - 60 Menit',
+    physicalPreparation: 'Kebugaran ringan sehari-hari.',
+    essentialGear: 'Pakaian santai kasual, sepatu olahraga, kamera ponsel.',
+    safetyAdvice: 'Ikuti jalur rute yang sudah ditentukan pengelola geopark UNESCO.',
+    summary: 'Gunung purba bekas gunung api dasar laut dengan pemandangan spektakuler dan rute yang sangat aman untuk segala usia di Yogyakarta.'
+  },
+  'gunung-batu-jonggol': {
+    grade: 1,
+    category: 'Rock Spire & 360 Degree View',
+    matchScore: 96,
+    trailCharacteristics: 'Jalur tanah pendek berlanjut ke punggungan batu monolit dengan tali web pegangan di bagian atas.',
+    recommendedDuration: 'Tektok Santai 1.5 - 2 Jam PP',
+    estimatedAscentHours: '45 - 60 Menit',
+    physicalPreparation: 'Keseimbangan tubuh dan tidak takut ketinggian di tebing terbuka.',
+    essentialGear: 'Sepatu bertapak karet anti selip, topi, sarung tangan kain.',
+    safetyAdvice: 'Area puncak sangat sempit dengan jurang di sisinya, hindari berfoto di tepi tebing yang rapuh.',
+    summary: 'Trek singkat dengan sensasi mendaki puncak tebing batu dan pemandangan perbukitan hijau Bogor Timur.'
+  },
+  'gunung-lembu': {
+    grade: 1,
+    category: 'Lakeside Panoramic Cliff Trek',
+    matchScore: 95,
+    trailCharacteristics: 'Jalur tanah melewati kebun bambu, terdapat spot ikonik Batu Lembu yang menghadap langsung ke Waduk Jatiluhur.',
+    recommendedDuration: 'Tektok Santai 2 - 3 Jam PP',
+    estimatedAscentHours: '1 - 1.5 Jam',
+    physicalPreparation: 'Kebugaran fisik umum untuk melangkah di jalan tanah menanjak.',
+    essentialGear: 'Sepatu olahraga, air minum 1.5L, kamera.',
+    safetyAdvice: 'Hati-hati saat berada di atas Batu Lembu saat angin bertiup kencang dari arah waduk.',
+    summary: 'Spot pemandangan matahari terbenam paling magis di Purwakarta dengan view Waduk Jatiluhur dari ketinggian.'
+  },
+  'gunung-bongkok': {
+    grade: 1,
+    category: 'Scenic Rock Summit & Short Trail',
+    matchScore: 94,
+    trailCharacteristics: 'Jalur tanah padat dengan tangga kayu buatan pengelola, puncak tumpukan batu andesit alami.',
+    recommendedDuration: 'Tektok Santai 2 - 3 Jam PP',
+    estimatedAscentHours: '1 - 1.5 Jam',
+    physicalPreparation: 'Stamina jalan kaki biasa.',
+    essentialGear: 'Sepatu gunung/sneakers, topi, air minum.',
+    safetyAdvice: 'Gunakan tali tambang bantu saat memanjat batuan puncak tumpuk.',
+    summary: 'Pilihan pendakian singkat yang ramah keluarga dengan view Kota Purwakarta dan Gunung Parang.'
+  },
+  'gunung-gentong': {
+    grade: 1,
+    category: 'Heritage Hilltop & Peaceful Landscape',
+    matchScore: 93,
+    trailCharacteristics: 'Jalur landai bertangga di kawasan perbukitan karst Gedangsari Gunungkidul, sangat ramah wisatawan.',
+    recommendedDuration: 'Tektok Santai 1 Jam PP',
+    estimatedAscentHours: '30 - 45 Menit',
+    physicalPreparation: 'Cukup jalan santai.',
+    essentialGear: 'Alas kaki nyaman, kacamata hitam, air minum.',
+    safetyAdvice: 'Cocok dikunjungi saat pagi hari sebelum terik matahari.',
+    summary: 'Pilihan trekking santai dengan pesona kabut pagi dan perbukitan hijau mirip Raja Ampat versi darat di Gunungkidul.'
+  },
+  'gunung-blego': {
+    grade: 1,
+    category: 'Crater Basin Hill Walk',
+    matchScore: 92,
+    trailCharacteristics: 'Jalur tanah perbukitan landai dengan bekas kawah purba yang kini menjadi area pertanian dan padang rumput.',
+    recommendedDuration: 'Tektok Santai 1.5 Jam PP',
+    estimatedAscentHours: '45 - 60 Menit',
+    physicalPreparation: 'Kebugaran santai harian.',
+    essentialGear: 'Sepatu santai, kamera, air mineral.',
+    safetyAdvice: 'Pemandangan paling indah dinikmati saat matahari terbit.',
+    summary: 'Wisata perbukitan di perbatasan Magetan-Wonogiri yang sangat ramah bagi pendaki pemula dan keluarga.'
+  },
+  'gunung-lasem': {
+    grade: 1,
+    category: 'Coastal View Hill',
+    matchScore: 91,
+    trailCharacteristics: 'Perbukitan dengan pemandangan Laut Jawa di kejauhan, jalur tanah berundak ramah.',
+    recommendedDuration: 'Tektok Santai 2 Jam PP',
+    estimatedAscentHours: '1 - 1.5 Jam',
+    physicalPreparation: 'Kebugaran fisik standar.',
+    essentialGear: 'Pakaian katun santai, kacamata hitam, air minum.',
+    safetyAdvice: 'Bawa pelindung terik matahari karena angin laut cukup kencang.',
+    summary: 'Puncak tertinggi di pesisir Rembang dengan panorama pesisir utara Pulau Jawa.'
+  }
+};
+
+/**
+ * Inferensi Cerdas Gunung Berdasarkan Heuristik Elevasi & Data Basecamp
+ */
+function inferMountainGrade(gunung) {
+  const slug = (gunung.slug || slugify(gunung.nama)).toLowerCase();
+  
+  // Cek apakah ada di aturan spesifik yang telah dikurasi
+  for (const [key, val] of Object.entries(CURATED_MOUNTAIN_DATA)) {
+    if (slug.includes(key) || key.includes(slug)) {
+      return { ...val, isCurated: true };
+    }
+  }
+
+  const elev = Number(gunung.ketinggian) || 1500;
+  let grade = 2;
+  let category = 'Introductory Mountain';
+  let matchScore = 88;
+  let duration = 'Camp 2 Hari 1 Malam';
+  let estHours = '3 - 5 Jam';
+  let char = 'Jalur tanah dan vegetasi pegunungan tropis, medan bertahap.';
+  let prep = 'Latihan kardio ringan 1-2 minggu sebelum pendakian.';
+  let gear = 'Tenda standar, sleeping bag, jaket windproof, air minum cukup.';
+  let safety = 'Patuhi jalur resmi pengelola dan jaga kebersihan alam bebas.';
+  let summary = `Gunung berketinggian ${elev} mdpl yang menarik untuk dijelajahi.`;
+
+  if (elev < 1100) {
+    grade = 1;
+    category = 'Low Elevation Hill & Fun Hike';
+    matchScore = 90;
+    duration = 'Tektok Santai 1.5 - 3 Jam PP';
+    estHours = '45 - 90 Menit';
+    char = 'Jalur bukit relatif landai, anak tangga tanah/batu, ramah untuk semua kalangan usia.';
+    prep = 'Kondisi fisik sehat biasa.';
+    gear = 'Sepatu olahraga/sandal gunung, air minum 1-1.5L, snack ringan.';
+    safety = 'Ikuti rambu penunjuk arah dan berhati-hati pada pijakan batu licin.';
+    summary = `Destinasi ramah keluarga dan pendaki pemula dengan ketinggian ${elev} mdpl yang tidak memerlukan waktu tempuh lama.`;
+  } else if (elev <= 2200) {
+    grade = 2;
+    category = 'Beginner Camp & Nature Trail';
+    matchScore = 89;
+    duration = 'Camp 1 Malam atau Tektok Cepat';
+    estHours = '2.5 - 4 Jam';
+    char = 'Jalur hutan tropis dengan kemiringan sedang, tanah padat berakar, camping ground di pos tertentu.';
+    prep = 'Jogging santai beberapa hari sebelumnya.';
+    gear = 'Tenda dome, sleeping bag hangat, jaket windproof, logistik makanan 2 hari.';
+    safety = 'Bawa persediaan air yang cukup dan siapkan pakaian hangat di malam hari.';
+    summary = `Pilihan ideal untuk pendaki pemula dengan ketinggian ${elev} mdpl dan panorama alam yang menyegarkan.`;
+  } else if (elev <= 3000) {
+    grade = 3;
+    category = 'Intermediate Mountain Ridge';
+    matchScore = 91;
+    duration = 'Camp 2 Hari 1 Malam';
+    estHours = '5 - 7.5 Jam';
+    char = 'Tanjakan terjal berkelanjutan, kombinasi akar pohon, tanah merah, dan padang rumput/semak terbuka.';
+    prep = 'Latihan lari 3-5 km dan penguatan otot kaki.';
+    gear = 'Carrier 45-60L, tenda kokoh, jaket tahan angin dan dingin, trekking pole, P3K lengkap.';
+    safety = 'Waspada perubahan cuaca mendadak dan kabut dingin di atas ketinggian 2.500 mdpl.';
+    summary = `Pendakian tingkat menengah di ketinggian ${elev} mdpl yang menawarkan tantangan fisik seimbang dan puncak memukau.`;
+  } else if (elev <= 3400) {
+    grade = 4;
+    category = 'High Altitude Advanced Peak';
+    matchScore = 93;
+    duration = 'Camp 2 Hari 1 Malam atau 3D2N';
+    estHours = '8 - 11 Jam';
+    char = 'Elevasi gain masif, medan berbatu terjal, suhu mendekati titik beku di malam hari, minim air di pos atas.';
+    prep = 'Ketahanan kardiovaskular tinggi dan latihan angkat beban ransel 12-15 kg.';
+    gear = 'Tenda badai, sleeping bag suhu ekstrem, jaket bulu angsa/thermal, headlamp terang, logistik melimpah.';
+    safety = 'Kenali gejala awal penyakit ketinggian (AMS/hipotermia). Istirahat berkala dan jangan mendaki sendirian.';
+    summary = `Puncak megah di ketinggian ${elev} mdpl yang menuntut stamina prima dan pengalaman mendaki yang matang.`;
+  } else {
+    grade = 5;
+    category = 'High Altitude Extreme Peak';
+    matchScore = 95;
+    duration = 'Camp 3 Hari 2 Malam atau Ekspedisi';
+    estHours = '10 - 14 Jam';
+    char = 'Medan pasir vulkanik curam atau punggungan jurang terjal di atas 3.400 mdpl dengan paparan cuaca liar.';
+    prep = 'Latihan ketahanan fisik intensif dan aklimatisasi ketinggian.';
+    gear = 'Perlengkapan teknis pendakian lengkap, respirator/masker, gaiter, tenda ekspedisi.';
+    safety = 'Perhatikan batas aman jam summit dan pantau terus aktivitas vulkanik serta prakiraan cuaca.';
+    summary = `Puncak tertinggi berketinggian ${elev} mdpl yang diperuntukkan bagi pendaki ahli dan berpengalaman.`;
+  }
+
+  return {
+    grade,
+    category,
+    matchScore,
+    trailCharacteristics: char,
+    recommendedDuration: duration,
+    estimatedAscentHours: estHours,
+    physicalPreparation: prep,
+    essentialGear: gear,
+    safetyAdvice: safety,
+    summary,
+    isCurated: false
+  };
+}
+
+/**
+ * Controller Endpoint: AI Rekomendasi Gunung Berdasarkan Level Pendaki (Grade 1 - 5)
+ * GET /api/ai-rekomendasi
+ */
+const getAiRecommendations = async (req, res) => {
+  try {
+    const { 
+      grade = 'all', 
+      provinsi = 'all', 
+      durasi = 'all', 
+      search = '' 
+    } = req.query;
+
+    const requestedGrade = grade !== 'all' ? parseInt(grade, 10) : null;
+    const gambarMap = await getGunungGambarMap();
+
+    // Query semua gunung beserta relasi basecamp & pos
+    const rawGunungList = await prisma.gunung.findMany({
+      include: {
+        basecamps: {
+          select: {
+            id: true,
+            nama: true,
+            jalurVia: true,
+            totalPos: true,
+            status: true,
+            elevasi: true,
+            kontak: true,
+            simaksiInfo: true,
+            _count: {
+              select: { pos: true }
+            }
+          }
+        }
+      },
+      orderBy: { ketinggian: 'desc' }
+    });
+
+    // Proses setiap gunung melalui AI Assessment Engine
+    const evaluatedMountains = rawGunungList.map(g => {
+      const assessment = inferMountainGrade(g);
+      const gradeDef = GRADE_DEFINITIONS[assessment.grade];
+      const gambar = gambarMap.get(g.id) || g.gambar || '/images/kanimap-avatar.jpg';
+
+      // Hitung elevasi gain perkiraan dari basecamp terendah
+      let minBcElev = g.ketinggian;
+      if (g.basecamps && g.basecamps.length > 0) {
+        minBcElev = Math.min(...g.basecamps.map(b => b.elevasi || 1500));
+      }
+      const elevGain = Math.max(0, g.ketinggian - minBcElev);
+
+      return {
+        id: g.id,
+        nama: g.nama,
+        slug: g.slug,
+        provinsi: g.provinsi,
+        kabupaten: g.kabupaten,
+        ketinggian: g.ketinggian,
+        statusJalur: g.statusJalur,
+        statusVulkanik: g.statusVulkanik,
+        cuacaSuhu: g.cuacaSuhu,
+        cuacaKondisi: g.cuacaKondisi,
+        gambar: gambar,
+        latitude: g.latitude,
+        longitude: g.longitude,
+        basecampsCount: g.basecamps ? g.basecamps.length : 0,
+        basecamps: g.basecamps || [],
+        elevGain: elevGain,
+        // AI Assessment Details
+        aiAssessment: {
+          grade: assessment.grade,
+          gradeTitle: gradeDef ? gradeDef.title : `Grade ${assessment.grade}`,
+          gradeBadge: gradeDef ? gradeDef.badgeText : `Grade ${assessment.grade}`,
+          gradeLevel: gradeDef ? gradeDef.level : '',
+          gradeColor: gradeDef ? gradeDef.color : '#3b82f6',
+          matchScore: assessment.matchScore,
+          category: assessment.category,
+          recommendedDuration: assessment.recommendedDuration,
+          estimatedAscentHours: assessment.estimatedAscentHours,
+          trailCharacteristics: assessment.trailCharacteristics,
+          physicalPreparation: assessment.physicalPreparation,
+          essentialGear: assessment.essentialGear,
+          safetyAdvice: assessment.safetyAdvice,
+          aiSummary: assessment.summary,
+          isCurated: assessment.isCurated || false
+        }
+      };
+    });
+
+    // Terapkan Filter
+    let filtered = evaluatedMountains;
+
+    // 1. Filter Grade
+    if (requestedGrade && [1, 2, 3, 4, 5].includes(requestedGrade)) {
+      filtered = filtered.filter(item => item.aiAssessment.grade === requestedGrade);
+    }
+
+    // 2. Filter Provinsi
+    if (provinsi && provinsi !== 'all') {
+      const provLower = provinsi.toLowerCase().replace(/-/g, ' ');
+      filtered = filtered.filter(item => {
+        const itemProv = (item.provinsi || '').toLowerCase();
+        if (provLower === 'jabar' || provLower.includes('barat')) return itemProv.includes('barat');
+        if (provLower === 'jateng' || provLower.includes('tengah')) return itemProv.includes('tengah');
+        if (provLower === 'jatim' || provLower.includes('timur')) return itemProv.includes('timur');
+        if (provLower === 'diy' || provLower.includes('yogyakarta')) return itemProv.includes('diy') || itemProv.includes('yogyakarta');
+        return itemProv.includes(provLower);
+      });
+    }
+
+    // 3. Filter Durasi
+    if (durasi && durasi !== 'all') {
+      const durLower = durasi.toLowerCase();
+      filtered = filtered.filter(item => {
+        const d = item.aiAssessment.recommendedDuration.toLowerCase();
+        if (durLower === 'tektok') return d.includes('tektok');
+        if (durLower === 'camp') return d.includes('camp') || d.includes('1 malam') || d.includes('2 malam');
+        if (durLower === 'ekspedisi') return d.includes('ekspedisi') || d.includes('3 malam') || d.includes('4 hari') || d.includes('5 hari');
+        return true;
+      });
+    }
+
+    // 4. Filter Kata Kunci Pencarian
+    if (search && search.trim() !== '') {
+      const q = search.trim().toLowerCase();
+      filtered = filtered.filter(item => 
+        (item.nama && item.nama.toLowerCase().includes(q)) ||
+        (item.kabupaten && item.kabupaten.toLowerCase().includes(q)) ||
+        (item.provinsi && item.provinsi.toLowerCase().includes(q)) ||
+        (item.aiAssessment.category && item.aiAssessment.category.toLowerCase().includes(q))
+      );
+    }
+
+    // Urutkan berdasarkan Match Score tertinggi, lalu ketinggian
+    filtered.sort((a, b) => {
+      if (b.aiAssessment.matchScore !== a.aiAssessment.matchScore) {
+        return b.aiAssessment.matchScore - a.aiAssessment.matchScore;
+      }
+      return b.ketinggian - a.ketinggian;
+    });
+
+    // Ringkasan Jumlah per Grade
+    const gradeCounts = {
+      1: evaluatedMountains.filter(m => m.aiAssessment.grade === 1).length,
+      2: evaluatedMountains.filter(m => m.aiAssessment.grade === 2).length,
+      3: evaluatedMountains.filter(m => m.aiAssessment.grade === 3).length,
+      4: evaluatedMountains.filter(m => m.aiAssessment.grade === 4).length,
+      5: evaluatedMountains.filter(m => m.aiAssessment.grade === 5).length
+    };
+
+    return res.json({
+      success: true,
+      message: 'Rekomendasi gunung berhasil diproses oleh AI Engine.',
+      totalFound: filtered.length,
+      gradeCounts,
+      gradeRubrics: GRADE_DEFINITIONS,
+      activeFilters: {
+        grade: requestedGrade || 'all',
+        provinsi: provinsi || 'all',
+        durasi: durasi || 'all',
+        search: search || ''
+      },
+      data: filtered
+    });
+
+  } catch (error) {
+    console.error('Error saat menghasilkan AI Rekomendasi:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Terjadi kesalahan sistem saat memproses rekomendasi AI',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getStats,
   getAllGunung,
   getGunungById,
   createGunung,
   updateGunung,
+  updateGunungGambarBatch,
   deleteGunung,
   getAllBasecamp,
   getBasecampById,
@@ -1644,6 +2556,7 @@ module.exports = {
   getRouteNavigation,
   exportGpx,
   updateCoordinatesBatch,
-  getTripPlan
+  getTripPlan,
+  getAiRecommendations
 };
 

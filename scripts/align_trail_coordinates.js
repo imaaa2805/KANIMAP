@@ -9,6 +9,8 @@
  * 4. Urutan Pos 1..N yang tepat berada di atas garis jalur pendakian dengan elevasi naik monotonik menuju Puncak
  */
 
+const fs = require('fs');
+const path = require('path');
 const prisma = require('../config/database');
 
 // Koordinat Puncak Terverifikasi tepat di titik segitiga ▲ OpenTopoMap / OpenStreetMap / PeakVisor / Mapcarta
@@ -19,7 +21,7 @@ const VERIFIED_PEAKS = {
   'Gunung Kawi': [-7.923300, 112.451800],
   'Gunung Arjuno': [-7.725000, 112.589400],
   'Gunung Penanggunan': [-7.615700, 112.620100],
-  'Gunung Kelud': [-7.930000, 112.308000],
+  'Gunung Kelud': [-7.934907, 112.313315],
   'Gunung Panderman': [-7.902800, 112.497700],
   'Gunung Raung': [-8.119500, 114.056300],
   'Gunung Dorowati': [-7.834000, 112.438000],
@@ -74,32 +76,32 @@ const VERIFIED_PEAKS = {
   'Gunung Merbabu': [-7.455000, 110.440000],
   'Gunung Sindoro': [-7.300810, 109.996210],
   'Gunung Merapi': [-7.541390, 110.446110],
-  'Gunung Prau': [-7.186940, 109.922780],
+  'Gunung Prau': [-7.197290, 109.932230],
   'Gunung Pakuwaja': [-7.229460, 109.922490],
   'Gunung Bisma': [-7.239170, 109.888830],
-  'Gunung Sikunir': [-7.238610, 109.929720],
-  'Gunung Sipandu': [-7.175000, 109.885000],
-  'Gunung Rogojembangan': [-7.176110, 109.711670],
-  'Gunung Ungaran': [-7.185134, 110.346941],
-  'Gunung Kendil': [-7.285000, 110.025000],
-  'Gunung Andong': [-7.389000, 110.371183],
+  'Gunung Sikunir': [-7.238385, 109.924722],
+  'Gunung Sipandu': [-7.192650, 109.902110],
+  'Gunung Rogojembangan': [-7.176389, 109.712778],
+  'Gunung Ungaran': [-7.185556, 110.347111],
+  'Gunung Kendil': [-7.265500, 109.990500],
+  'Gunung Andong': [-7.388670, 110.371560],
   'Gunung Muria': [-6.616200, 110.890300],
-  'Gunung Nagasari': [-7.145000, 109.685000],
-  'Gunung Batur': [-7.168000, 110.348000],
-  'Gunung Beser': [-7.565000, 111.115000],
-  'Gunung Wagir Jarian': [-7.558000, 109.585000],
-  'Gunung Lumping': [-7.245000, 110.095000],
-  'Gunung Turgo': [-7.582500, 110.424500],
-  'Gunung Kumbang': [-7.125000, 108.815000],
-  'Gunung Lanang': [-7.452000, 109.812000],
-  'Gunung Gajah': [-7.095000, 109.305000],
-  'Gunung Midangan': [-7.585000, 109.845000],
-  'Gunung Ayamayam': [-7.562000, 109.915000],
-  'Gunung Kukusan': [-7.638000, 110.145000],
-  'Gunung Blego': [-7.885000, 111.245000],
-  'Gunung Lasem': [-6.692000, 111.515000],
+  'Gunung Nagasari': [-7.207783, 109.871710],
+  'Gunung Batur': [-7.394200, 110.442400],
+  'Gunung Beser': [-7.233330, 109.426940],
+  'Gunung Wagir Jarian': [-7.539373, 109.395372],
+  'Gunung Lumping': [-7.126999, 109.622852],
+  'Gunung Turgo': [-7.584023, 110.423840],
+  'Gunung Kumbang': [-7.130565, 108.848544],
+  'Gunung Lanang': [-7.512851, 109.869101],
+  'Gunung Gajah': [-7.000722, 109.298917],
+  'Gunung Midangan': [-7.439303, 109.752738],
+  'Gunung Ayamayam': [-7.637480, 110.133439],
+  'Gunung Kukusan': [-7.644980, 110.142360],
+  'Gunung Blego': [-7.758876, 111.294182],
+  'Gunung Lasem': [-6.675034, 111.488697],
   'Gunung Api Purba Nglanggeran': [-7.840760, 110.542770],
-  'Gunung Gentong': [-7.854722, 110.573611]
+  'Gunung Gentong': [-7.859722, 110.570278]
 };
 
 // Koordinat Basecamp Terverifikasi untuk seluruh Jalur Via ('Nama Gunung|Jalur Via')
@@ -137,10 +139,10 @@ const VERIFIED_BASECAMPS = {
   'Gunung Penanggunan|Tamiajeng': [-7.6320, 112.6150],
   'Gunung Penanggunan|Ngoro': [-7.5950, 112.6250],
 
-  // Gunung Kelud
-  'Gunung Kelud|Tulungrejo': [-7.9680, 112.3180],
-  'Gunung Kelud|Karangrejo': [-7.9450, 112.2750],
-  'Gunung Kelud|Karanganyar': [-7.9120, 112.2720],
+  // Gunung Kelud (Puncak OSM/PeakVisor: -7.934907, 112.313315)
+  'Gunung Kelud|Tulungrejo': [-7.959675, 112.347786],
+  'Gunung Kelud|Karangrejo': [-7.962500, 112.301500],
+  'Gunung Kelud|Karanganyar': [-7.941500, 112.278500],
 
   // Gunung Panderman
   'Gunung Panderman|Dusun Toyomerto': [-7.8910, 112.5120],
@@ -340,12 +342,12 @@ const VERIFIED_BASECAMPS = {
   // Gunung Merapi
   'Gunung Merapi|Selo': [-7.5080, 110.4520],
 
-  // Gunung Prau
-  'Gunung Prau|Patakbanteng': [-7.2120, 109.9180],
-  'Gunung Prau|Dieng Kulon': [-7.2020, 109.9050],
-  'Gunung Prau|Wates': [-7.1850, 109.9520],
-  'Gunung Prau|Kalilembu': [-7.2080, 109.9120],
-  'Gunung Prau|Igirmranak': [-7.2220, 109.9280],
+  // Gunung Prau (Puncak Gunung Parahu OSM/Mapcarta: -7.197290, 109.932230)
+  'Gunung Prau|Patakbanteng': [-7.204500, 109.914200],
+  'Gunung Prau|Dieng Kulon': [-7.202500, 109.906800],
+  'Gunung Prau|Wates': [-7.225400, 109.959700],
+  'Gunung Prau|Kalilembu': [-7.205600, 109.919000],
+  'Gunung Prau|Igirmranak': [-7.212300, 109.940700],
 
   // Gunung Pakuwaja
   'Gunung Pakuwaja|Parikesit': [-7.2120, 109.9210],
@@ -356,82 +358,82 @@ const VERIFIED_BASECAMPS = {
   'Gunung Bisma|Sikunang': [-7.2250, 109.8980],
   'Gunung Bisma|Deroduwur': [-7.2620, 109.8750],
 
-  // Gunung Sikunir
-  'Gunung Sikunir|Sembungan': [-7.2355, 109.9215],
+  // Gunung Sikunir (Puncak Bukit Sikunir: -7.238385, 109.924722 | Parkiran Telaga Cebong Sembungan: -7.235800, 109.921200)
+  'Gunung Sikunir|Sembungan': [-7.235800, 109.921200],
 
-  // Gunung Sipandu
-  'Gunung Sipandu|Pranten': [-7.1635, 109.8790],
+  // Gunung Sipandu (Puncak OSM/Geoview: -7.192650, 109.902110 | BC Pranten Bawang Batang: -7.176500, 109.898500)
+  'Gunung Sipandu|Pranten': [-7.176500, 109.898500],
 
-  // Gunung Rogojembangan
-  'Gunung Rogojembangan|Gumelem': [-7.1620, 109.6980],
-  'Gunung Rogojembangan|Wanayasa': [-7.1920, 109.7250],
+  // Gunung Rogojembangan (Puncak OSM/Mapcarta: -7.176389, 109.712778)
+  'Gunung Rogojembangan|Gumelem': [-7.159500, 109.714500],
+  'Gunung Rogojembangan|Wanayasa': [-7.193500, 109.710500],
 
-  // Gunung Ungaran
-  'Gunung Ungaran|Mawar': [-7.1950, 110.3620],
-  'Gunung Ungaran|Gedong Songo': [-7.2080, 110.3420],
-  'Gunung Ungaran|Promasan': [-7.1620, 110.3180],
-  'Gunung Ungaran|Perantunan': [-7.2020, 110.3520],
+  // Gunung Ungaran (Puncak OSM/Mapcarta: -7.185556, 110.347111)
+  'Gunung Ungaran|Mawar': [-7.195800, 110.362200],
+  'Gunung Ungaran|Gedong Songo': [-7.209800, 110.342100],
+  'Gunung Ungaran|Promasan': [-7.173500, 110.329500],
+  'Gunung Ungaran|Perantunan': [-7.205200, 110.351200],
 
-  // Gunung Kendil
-  'Gunung Kendil|Sibajag': [-7.2740, 110.0330],
+  // Gunung Kendil / Bukit Sikendil (Puncak: -7.265500, 109.990500 | BC Sibajag Candiroto Temanggung: -7.268156, 109.996139)
+  'Gunung Kendil|Sibajag': [-7.268156, 109.996139],
 
-  // Gunung Andong
-  'Gunung Andong|Sawit': [-7.3940, 110.3610],
-  'Gunung Andong|Pendem': [-7.3960, 110.3740],
-  'Gunung Andong|Gogik': [-7.3780, 110.3560],
+  // Gunung Andong (Puncak OSM/Mapcarta: -7.388670, 110.371560)
+  'Gunung Andong|Sawit': [-7.394800, 110.365200],
+  'Gunung Andong|Pendem': [-7.395500, 110.373200],
+  'Gunung Andong|Gogik': [-7.382500, 110.362500],
 
   // Gunung Muria
   'Gunung Muria|Rahtawu': [-6.6520, 110.8820],
   'Gunung Muria|Tempur': [-6.5880, 110.8950],
   'Gunung Muria|Pemberit': [-6.6120, 110.9250],
 
-  // Gunung Nagasari
-  'Gunung Nagasari|Dieng Kulon': [-7.1335, 109.6780],
+  // Gunung Nagasari (Puncak OSM/PeakVisor: -7.207783, 109.871710)
+  'Gunung Nagasari|Dieng Kulon': [-7.202500, 109.882500],
 
-  // Gunung Batur
-  'Gunung Batur|Selo': [-7.1785, 110.3435],
+  // Gunung Batur (Puncak Gumuk Selo Duwur Desa Batur Getasan Semarang: -7.394200, 110.442400)
+  'Gunung Batur|Selo': [-7.388500, 110.438500],
 
-  // Gunung Beser
-  'Gunung Beser|Bawang': [-7.5755, 111.1085],
+  // Gunung Beser (Puncak OSM Node 1070173690: -7.233330, 109.426940)
+  'Gunung Beser|Bawang': [-7.224500, 109.431500],
 
-  // Gunung Wagir Jarian
-  'Gunung Wagir Jarian|Sawangan': [-7.5685, 109.5865],
+  // Gunung Wagir Jarian / Wagir Jampang (Puncak OSM/BIG: -7.539373, 109.395372)
+  'Gunung Wagir Jarian|Sawangan': [-7.531500, 109.401500],
 
-  // Gunung Lumping
-  'Gunung Lumping|Sukorejo': [-7.2555, 110.1010],
+  // Gunung Lumping (Puncak OSM/BIG: -7.126999, 109.622852)
+  'Gunung Lumping|Sukorejo': [-7.118500, 109.619500],
 
-  // Gunung Turgo
-  'Gunung Turgo|Turgo': [-7.5905, 110.4220],
+  // Gunung Turgo (Puncak OSM/PeakVisor: -7.584023, 110.423840)
+  'Gunung Turgo|Turgo': [-7.589200, 110.422500],
 
-  // Gunung Kumbang
-  'Gunung Kumbang|Salem': [-7.1105, 108.8215],
+  // Gunung Kumbang (Puncak OSM/PeakVisor Salem Brebes: -7.130565, 108.848544)
+  'Gunung Kumbang|Salem': [-7.142500, 108.843500],
 
-  // Gunung Lanang
-  'Gunung Lanang|Mergolunjar': [-7.4425, 109.8075],
+  // Gunung Lanang (Puncak OSM/BIG Mergolangu Wonosobo: -7.512851, 109.869101)
+  'Gunung Lanang|Mergolunjar': [-7.505500, 109.865500],
 
-  // Gunung Gajah
-  'Gunung Gajah|Gongseng': [-7.0865, 109.3010],
+  // Gunung Gajah (Puncak OSM Gongseng Randudongkal Pemalang: -7.000722, 109.298917)
+  'Gunung Gajah|Gongseng': [-6.994500, 109.295500],
 
-  // Gunung Midangan
-  'Gunung Midangan|Pituruh': [-7.5955, 109.8410],
+  // Gunung Midangan (Puncak OSM/BIG Serayu Selatan: -7.439303, 109.752738)
+  'Gunung Midangan|Pituruh': [-7.448500, 109.756500],
 
-  // Gunung Ayamayam
-  'Gunung Ayamayam|Sadang': [-7.5725, 109.9105],
+  // Gunung Ayamayam (Puncak OSM/BIG Menoreh: -7.637480, 110.133439)
+  'Gunung Ayamayam|Sadang': [-7.644500, 110.128500],
 
-  // Gunung Kukusan
-  'Gunung Kukusan|Nglinggo': [-7.6465, 110.1475],
+  // Gunung Kukusan (Puncak Kukusan Ngargoretno-Nglinggo Menoreh: -7.644980, 110.142360)
+  'Gunung Kukusan|Nglinggo': [-7.648500, 110.140200],
 
-  // Gunung Blego
-  'Gunung Blego|Trompo': [-7.8950, 111.2495],
+  // Gunung Blego (Puncak OSM/BIG Puhpelem Wonogiri: -7.758876, 111.294182)
+  'Gunung Blego|Trompo': [-7.766500, 111.289500],
 
-  // Gunung Lasem
-  'Gunung Lasem|Gowak': [-6.6985, 111.4985],
+  // Gunung Lasem / Puncak Argopuro (Puncak BIG Rembang: -6.675034, 111.488697 | BC Gowak Lasem: -6.678500, 111.472500)
+  'Gunung Lasem|Gowak': [-6.678500, 111.472500],
 
   // Gunung Api Purba Nglanggeran (Puncak Gunung Gedhe: -7.840760, 110.542770 | BC Pendopo Kaliadem: -7.843500, 110.538200)
   'Gunung Api Purba Nglanggeran|Nglanggeran': [-7.843500, 110.538200],
 
-  // Gunung Gentong / Puncak 4G Gedangsari (Puncak: -7.854722, 110.573611 | BC Manggung Ngalang: -7.861500, 110.570500)
-  'Gunung Gentong|Ngalang': [-7.861500, 110.570500],
+  // Gunung Gentong / Puncak 4G Gedangsari (Puncak OSM/GeoNames/PeakVisor: -7.859722, 110.570278 | BC Manggung Ngalang: -7.865500, 110.573500)
+  'Gunung Gentong|Ngalang': [-7.865500, 110.573500],
 
   // Gunung Pangradinan
   'Gunung Pangradinan|Cihanyir (Cikancung)': [-7.0365, 107.8342],
@@ -656,6 +658,52 @@ async function alignAllTrails() {
         updatedPosCount++;
       }
     }
+  }
+
+  // Sinkronkan juga koordinat Pos terverifikasi ke database/jalur_pendakian.csv
+  try {
+    const csvPath = path.join(__dirname, '..', 'database', 'jalur_pendakian.csv');
+    const allGunung = await prisma.gunung.findMany({
+      include: {
+        basecamps: {
+          include: {
+            pos: { orderBy: { urutan: 'asc' } }
+          }
+        }
+      },
+      orderBy: { id: 'asc' }
+    });
+    const escapeCsv = (val) => {
+      if (val === null || val === undefined) return '';
+      const str = String(val);
+      return (str.includes(',') || str.includes('"')) ? `"${str.replace(/"/g, '""')}"` : str;
+    };
+    const csvLines = ['provinsi,kabupaten,nama_gunung,ketinggian,jalur_via,total_pos,nama_pos,latitude,longitude,nama_basecamp,id_basecamp,sumber'];
+    for (const g of allGunung) {
+      for (const b of g.basecamps) {
+        const posList = b.pos || [];
+        for (const p of posList) {
+          csvLines.push([
+            escapeCsv(g.provinsi),
+            escapeCsv(g.kabupaten),
+            escapeCsv(g.nama),
+            g.ketinggian,
+            escapeCsv(b.jalurVia),
+            posList.length,
+            escapeCsv(p.namaPos),
+            p.latitude,
+            p.longitude,
+            escapeCsv(b.nama),
+            b.id,
+            escapeCsv(p.sumber || b.sumber || 'OpenTopoMap / OSM Verified')
+          ].join(','));
+        }
+      }
+    }
+    fs.writeFileSync(csvPath, csvLines.join('\n') + '\n', 'utf8');
+    console.log(`📄 File CSV diperbarui:  database/jalur_pendakian.csv (${csvLines.length - 1} baris)`);
+  } catch (csvErr) {
+    console.warn('⚠️ Gagal menyinkronkan CSV:', csvErr.message);
   }
 
   console.log(`\n✅ Penyelarasan Penuh Selesai!`);

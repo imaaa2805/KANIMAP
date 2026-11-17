@@ -26,6 +26,7 @@ model Gunung {
   cuacaKondisi   String     @default("Cerah Berawan")
   latitude       Float?     // Koordinat titik puncak / representatif
   longitude      Float?
+  gambar         String?    // URL / path foto gunung
   deskripsi      String?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt

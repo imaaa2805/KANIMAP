@@ -7,6 +7,7 @@ router.get('/stats', pendakianController.getStats);
 
 // Gunung Endpoints (CRUD)
 router.get('/gunung', pendakianController.getAllGunung);
+router.put('/gunung/gambar-batch', pendakianController.updateGunungGambarBatch);
 router.get('/gunung/:id', pendakianController.getGunungById);
 router.post('/gunung', pendakianController.createGunung);
 router.put('/gunung/:id', pendakianController.updateGunung);
@@ -30,6 +31,7 @@ router.get('/route', pendakianController.getRouteNavigation);
 router.get('/gpx/:basecampId', pendakianController.exportGpx);
 router.put('/coordinates/batch', pendakianController.updateCoordinatesBatch);
 router.get('/trip-planner/:basecampId', pendakianController.getTripPlan);
+router.get('/ai-rekomendasi', pendakianController.getAiRecommendations);
 
 // Backward Compatibility Aliases for fasilitas
 router.get('/fasilitas', pendakianController.getAllBasecamp);
